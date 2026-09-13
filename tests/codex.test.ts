@@ -7,8 +7,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { buildCodexInvocation, runCodex } from "../src/codex.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildCodexInvocation,
+  createKillEscalation,
+  runCodex,
+} from "../src/codex.js";
 
 const processAlive = (pid: number): boolean => {
   try {
@@ -159,3 +163,50 @@ describe("Codex process", () => {
     expect(existsSync(stderrPath)).toBe(false);
   });
 });
+
+describe("Kill escalation coordinator", () => {
+  it("completes done when fail path cancels the grace timer early", async () => {
+    const handles: Array<ReturnType<typeof setTimeout>> = [];
+    const schedule = vi.fn((fn: () => void, ms: number) => {
+      const handle = setTimeout(fn, ms);
+      handles.push(handle);
+      return handle;
+    });
+    const cancel = vi.fn((handle: ReturnType<typeof setTimeout>) => {
+      clearTimeout(handle);
+    });
+    const reap = vi.fn(async () => {
+      // no-op reap for deterministic unit coverage
+    });
+
+    const escalation = createKillEscalation({
+      pgid: 1,
+      graceMs: 60_000,
+      reap,
+      schedule,
+      cancel,
+    });
+
+    // Simulate fail() after timeout armed escalation: complete without waiting
+    // for the long grace timer. done must settle (no hang in outer finally).
+    const finished = await Promise.race([
+      escalation.completeNow().then(() => "completed" as const),
+      new Promise<"hung">((resolve) => {
+        setTimeout(() => resolve("hung"), 500);
+      }),
+    ]);
+
+    expect(finished).toBe("completed");
+    expect(escalation.isComplete()).toBe(true);
+    expect(cancel).toHaveBeenCalled();
+    expect(reap).toHaveBeenCalledTimes(1);
+
+    // Second completeNow is idempotent and does not re-reap.
+    await escalation.completeNow();
+    expect(reap).toHaveBeenCalledTimes(1);
+    await expect(escalation.done).resolves.toBeUndefined();
+
+    for (const handle of handles) clearTimeout(handle);
+  });
+});
+

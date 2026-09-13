@@ -171,7 +171,9 @@ async function waitUntilGroupEmpty(
  * After the SIGTERM grace period: SIGKILL the group and every remaining
  * member, and do not return until the group is empty (within budget).
  */
-async function forceReapProcessGroup(pgid: number | undefined): Promise<void> {
+export async function forceReapProcessGroup(
+  pgid: number | undefined,
+): Promise<void> {
   if (pgid === undefined) return;
   signalProcessGroup(pgid, "SIGKILL");
   if (await waitUntilGroupEmpty(pgid, POST_KILL_REAP_MS)) return;
@@ -179,35 +181,95 @@ async function forceReapProcessGroup(pgid: number | undefined): Promise<void> {
   await waitUntilGroupEmpty(pgid, POST_KILL_REAP_MS);
 }
 
+export interface KillEscalation {
+  /** Settles only after force-reap has run (timer path or early complete). */
+  readonly done: Promise<void>;
+  /** True after force-reap finished via any path. */
+  readonly isComplete: () => boolean;
+  /**
+   * Cancel the grace timer if still pending, force-reap now, and resolve
+   * `done`. Idempotent — safe from fail paths and the timer callback.
+   */
+  readonly completeNow: () => Promise<void>;
+}
+
+export interface CreateKillEscalationOptions {
+  pgid: number | undefined;
+  graceMs: number;
+  /** Injected for tests; defaults to forceReapProcessGroup. */
+  reap?: (pgid: number | undefined) => Promise<void>;
+  /** Injected for tests; defaults to setTimeout. */
+  schedule?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  /** Injected for tests; defaults to clearTimeout. */
+  cancel?: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+/**
+ * Shared timeout→SIGKILL coordinator.
+ * Clearing the grace timer always goes through `completeNow`, which also
+ * resolves `done`, so outer `finally { await done }` cannot hang.
+ */
+export function createKillEscalation(
+  options: CreateKillEscalationOptions,
+): KillEscalation {
+  const reap = options.reap ?? forceReapProcessGroup;
+  const schedule = options.schedule ?? setTimeout;
+  const cancel = options.cancel ?? clearTimeout;
+
+  let complete = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+  let inFlight: Promise<void> | undefined;
+
+  const runComplete = (): Promise<void> => {
+    if (complete) return Promise.resolve();
+    if (inFlight) return inFlight;
+    if (timer !== undefined) {
+      cancel(timer);
+      timer = undefined;
+    }
+    inFlight = Promise.resolve()
+      .then(() => reap(options.pgid))
+      .catch(() => {
+        // Reap best-effort; always mark complete so waiters cannot hang.
+      })
+      .then(() => {
+        complete = true;
+        inFlight = undefined;
+        resolveDone();
+      });
+    return inFlight;
+  };
+
+  timer = schedule(() => {
+    void runComplete();
+  }, options.graceMs);
+
+  return {
+    done,
+    isComplete: () => complete,
+    completeNow: runComplete,
+  };
+}
+
 export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
   const killGraceMs = input.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let killTimer: ReturnType<typeof setTimeout> | undefined;
   let events: WriteStream | undefined;
   let stderr: WriteStream | undefined;
   let child: ChildProcess | undefined;
   let groupPid: number | undefined;
-  /** Resolves only after the post-timeout SIGKILL escalation has run. */
-  let killEscalation: Promise<void> | undefined;
+  let escalation: KillEscalation | undefined;
 
   const clearTimeoutTimer = (): void => {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
-  };
-
-  const clearKillTimer = (): void => {
-    if (killTimer !== undefined) {
-      clearTimeout(killTimer);
-      killTimer = undefined;
-    }
-  };
-
-  const clearTimers = (): void => {
-    clearTimeoutTimer();
-    clearKillTimer();
   };
 
   try {
@@ -226,31 +288,31 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
     return await new Promise<CodexResult>((resolve, reject) => {
       let settled = false;
       let closeResult: CodexResult | undefined;
-      let killEscalationDone = false;
 
       const trySettle = (): void => {
         if (settled || !closeResult) return;
         // After timeout, hold settle until SIGKILL escalation has finished.
-        if (closeResult.timedOut && !killEscalationDone) return;
+        if (closeResult.timedOut && !(escalation?.isComplete() ?? false)) {
+          return;
+        }
         settled = true;
         clearTimeoutTimer();
         resolve(closeResult);
       };
 
-      const finishKillEscalation = (): void => {
-        if (killEscalationDone) return;
-        killEscalationDone = true;
-        clearKillTimer();
-        trySettle();
-      };
-
       const fail = (error: Error): void => {
         if (settled) return;
         settled = true;
-        clearTimers();
-        void forceReapProcessGroup(groupPid).finally(() => {
+        clearTimeoutTimer();
+        const finishFail = (): void => {
           reject(error);
-        });
+        };
+        if (escalation) {
+          // Never clear escalation without completing its promise.
+          void escalation.completeNow().finally(finishFail);
+          return;
+        }
+        void forceReapProcessGroup(groupPid).finally(finishFail);
       };
 
       const onStreamError = (error: Error): void => {
@@ -275,16 +337,13 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
         }
         signalProcessGroup(groupPid, "SIGTERM");
 
-        // Keep SIGKILL armed for the full grace period even if the leader
-        // exits on SIGTERM first. Descendants that ignore SIGTERM must still
-        // be reaped before runCodex resolves.
-        killEscalation = new Promise<void>((done) => {
-          killTimer = setTimeout(() => {
-            void forceReapProcessGroup(groupPid).finally(() => {
-              finishKillEscalation();
-              done();
-            });
-          }, killGraceMs);
+        // Shared coordinator: timer path and fail path both complete `done`.
+        escalation = createKillEscalation({
+          pgid: groupPid,
+          graceMs: killGraceMs,
+        });
+        void escalation.done.then(() => {
+          trySettle();
         });
 
         trySettle();
@@ -304,18 +363,15 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
           trySettle();
           return;
         }
-        // Leader closed after timeout: do NOT clear killTimer.
+        // Leader closed after timeout: do NOT cancel escalation.
         trySettle();
       });
     });
   } finally {
     clearTimeoutTimer();
-    // Never cancel an armed kill escalation from finally before it runs;
-    // await it so SIGTERM-resistant descendants are reaped first.
-    if (killEscalation) {
-      await killEscalation;
-    } else {
-      clearKillTimer();
+    // Await armed escalation so fail/timer both unblock this path.
+    if (escalation) {
+      await escalation.done;
     }
     if (child?.stdout && events && !events.destroyed) {
       child.stdout.unpipe(events);
