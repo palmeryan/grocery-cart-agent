@@ -5,4 +5,13 @@ export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**", "runs/**"] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["tests/fixtures/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        setInterval: "readonly",
+      },
+    },
+  },
 );
