@@ -1,0 +1,90 @@
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
+import { basename, join } from "node:path";
+import type { CartReport, RunPaths } from "./types.js";
+import { parseReport } from "./validation.js";
+
+export const sha256 = (value: string): string =>
+  createHash("sha256").update(value).digest("hex");
+
+const sortKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, sortKeys(child)]),
+    );
+  }
+  return value;
+};
+
+export const canonicalRequest = (value: unknown): string =>
+  `${JSON.stringify(sortKeys(value), null, 2)}\n`;
+
+export function createRunPaths(rootDir: string, now = new Date()): RunPaths {
+  const runId = now.toISOString().replaceAll(":", "-").replace(".", "-");
+  const runDir = join(rootDir, "runs", runId);
+  const browserOutputDir = join(runDir, "browser");
+  mkdirSync(browserOutputDir, { recursive: true, mode: 0o700 });
+  return {
+    runId,
+    runDir,
+    requestPath: join(runDir, "request.json"),
+    reportPath: join(runDir, "report.json"),
+    eventsPath: join(runDir, "codex-events.jsonl"),
+    stderrPath: join(runDir, "codex-stderr.log"),
+    browserOutputDir,
+  };
+}
+
+export function writeRequestSnapshot(source: string, destination: string): void {
+  cpSync(source, destination, { errorOnExist: true });
+  chmodSync(destination, 0o600);
+}
+
+export function findPreviousReport(
+  runsDir: string,
+  requestSha256: string,
+): CartReport | null {
+  let runIds: string[];
+  try {
+    runIds = readdirSync(runsDir).sort().reverse();
+  } catch {
+    return null;
+  }
+  for (const runId of runIds) {
+    try {
+      const value = parseReport(
+        readFileSync(join(runsDir, runId, "report.json"), "utf8"),
+      );
+      if (value.requestSha256 === requestSha256) return value;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export function writeRunMetadata(
+  paths: RunPaths,
+  requestSource: string,
+  requestSha256: string,
+): void {
+  writeFileSync(
+    join(paths.runDir, "metadata.json"),
+    `${JSON.stringify({
+      requestSource: basename(requestSource),
+      requestSha256,
+      createdAt: new Date().toISOString(),
+    }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
