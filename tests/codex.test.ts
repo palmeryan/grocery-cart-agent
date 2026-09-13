@@ -10,6 +10,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildCodexInvocation, runCodex } from "../src/codex.js";
 
+const processAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 describe("Codex invocation", () => {
   it("uses a read-only sandbox and never bypasses approvals", () => {
     const invocation = buildCodexInvocation({
@@ -104,20 +113,30 @@ describe("Codex process", () => {
     expect(existsSync(markerPath)).toBe(true);
     const descendantPid = Number(readFileSync(markerPath, "utf8"));
     expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
+    expect(processAlive(descendantPid)).toBe(false);
+  });
 
-    const alive = (): boolean => {
-      try {
-        process.kill(descendantPid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const stop = Date.now() + 2_000;
-    while (alive() && Date.now() < stop) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    expect(alive()).toBe(false);
+  it("keeps SIGKILL armed after leader exits so SIGTERM-resistant descendants die", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-resist-"));
+    const markerPath = join(runDir, "descendant.pid");
+    const killGraceMs = 250;
+    const result = await runCodex({
+      executable: process.execPath,
+      args: [fakeCodex, "--spawn-term-resistant-descendant", markerPath],
+      prompt: "test",
+      eventsPath: join(runDir, "events.jsonl"),
+      stderrPath: join(runDir, "stderr.log"),
+      timeoutMs: 100,
+      killGraceMs,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+
+    expect(existsSync(markerPath)).toBe(true);
+    const descendantPid = Number(readFileSync(markerPath, "utf8"));
+    expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
+    // runCodex must not resolve until escalation reaped the resistant child.
+    expect(processAlive(descendantPid)).toBe(false);
   });
 
   it("fails fast when an exclusive log file cannot be opened", async () => {

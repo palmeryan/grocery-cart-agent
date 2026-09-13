@@ -1,5 +1,5 @@
 import { createWriteStream, type WriteStream } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
 export interface CodexInvocationInput {
@@ -33,6 +33,8 @@ export interface RunCodexInput {
 }
 
 const DEFAULT_KILL_GRACE_MS = 2_000;
+const POST_KILL_REAP_MS = 1_000;
+const REAP_POLL_MS = 25;
 
 export function buildCodexInvocation(
   input: CodexInvocationInput,
@@ -108,23 +110,73 @@ async function closeLog(stream: WriteStream | undefined): Promise<void> {
   }
 }
 
-function signalProcessGroup(
-  child: ChildProcess | undefined,
-  signal: NodeJS.Signals,
-): void {
-  if (!child) return;
-  const pid = child.pid;
-  if (pid === undefined) return;
+/** PIDs still alive in the process group (macOS/Linux). */
+function listProcessGroupMembers(pgid: number): number[] {
   try {
-    // Negative PID targets the process group (detached child is group leader).
-    process.kill(-pid, signal);
+    const stdout = execFileSync("pgrep", ["-g", String(pgid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return stdout
+      .split("\n")
+      .map((line) => Number(line.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
   } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      // Already exited (ESRCH) or not killable.
-    }
+    return [];
   }
+}
+
+function processGroupHasMembers(pgid: number): boolean {
+  return listProcessGroupMembers(pgid).length > 0;
+}
+
+function signalPid(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // ESRCH / EPERM — already gone or not killable.
+  }
+}
+
+/**
+ * Signal the whole group, then every remaining member individually.
+ * Needed because on macOS `kill(-pgid)` can succeed while orphaned
+ * SIGTERM-resistant members remain until hit by PID.
+ */
+function signalProcessGroup(pgid: number | undefined, signal: NodeJS.Signals): void {
+  if (pgid === undefined) return;
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    // Group leader may already be dead.
+  }
+  for (const pid of listProcessGroupMembers(pgid)) {
+    signalPid(pid, signal);
+  }
+}
+
+async function waitUntilGroupEmpty(
+  pgid: number,
+  budgetMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (!processGroupHasMembers(pgid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, REAP_POLL_MS));
+  }
+  return !processGroupHasMembers(pgid);
+}
+
+/**
+ * After the SIGTERM grace period: SIGKILL the group and every remaining
+ * member, and do not return until the group is empty (within budget).
+ */
+async function forceReapProcessGroup(pgid: number | undefined): Promise<void> {
+  if (pgid === undefined) return;
+  signalProcessGroup(pgid, "SIGKILL");
+  if (await waitUntilGroupEmpty(pgid, POST_KILL_REAP_MS)) return;
+  signalProcessGroup(pgid, "SIGKILL");
+  await waitUntilGroupEmpty(pgid, POST_KILL_REAP_MS);
 }
 
 export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
@@ -135,16 +187,27 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
   let events: WriteStream | undefined;
   let stderr: WriteStream | undefined;
   let child: ChildProcess | undefined;
+  let groupPid: number | undefined;
+  /** Resolves only after the post-timeout SIGKILL escalation has run. */
+  let killEscalation: Promise<void> | undefined;
 
-  const clearTimers = (): void => {
+  const clearTimeoutTimer = (): void => {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
+  };
+
+  const clearKillTimer = (): void => {
     if (killTimer !== undefined) {
       clearTimeout(killTimer);
       killTimer = undefined;
     }
+  };
+
+  const clearTimers = (): void => {
+    clearTimeoutTimer();
+    clearKillTimer();
   };
 
   try {
@@ -158,29 +221,36 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
       detached: true,
     });
     child = spawned;
-
-    timer = setTimeout(() => {
-      timedOut = true;
-      signalProcessGroup(spawned, "SIGTERM");
-      killTimer = setTimeout(() => {
-        signalProcessGroup(spawned, "SIGKILL");
-      }, killGraceMs);
-    }, input.timeoutMs);
+    groupPid = spawned.pid;
 
     return await new Promise<CodexResult>((resolve, reject) => {
       let settled = false;
-      const finish = (result: CodexResult): void => {
-        if (settled) return;
+      let closeResult: CodexResult | undefined;
+      let killEscalationDone = false;
+
+      const trySettle = (): void => {
+        if (settled || !closeResult) return;
+        // After timeout, hold settle until SIGKILL escalation has finished.
+        if (closeResult.timedOut && !killEscalationDone) return;
         settled = true;
-        clearTimers();
-        resolve(result);
+        clearTimeoutTimer();
+        resolve(closeResult);
       };
+
+      const finishKillEscalation = (): void => {
+        if (killEscalationDone) return;
+        killEscalationDone = true;
+        clearKillTimer();
+        trySettle();
+      };
+
       const fail = (error: Error): void => {
         if (settled) return;
         settled = true;
         clearTimers();
-        signalProcessGroup(spawned, "SIGKILL");
-        reject(error);
+        void forceReapProcessGroup(groupPid).finally(() => {
+          reject(error);
+        });
       };
 
       const onStreamError = (error: Error): void => {
@@ -198,19 +268,55 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
       spawned.stderr.pipe(stderr!);
       spawned.stdin.end(input.prompt);
 
+      timer = setTimeout(() => {
+        timedOut = true;
+        if (closeResult) {
+          closeResult = { ...closeResult, timedOut: true };
+        }
+        signalProcessGroup(groupPid, "SIGTERM");
+
+        // Keep SIGKILL armed for the full grace period even if the leader
+        // exits on SIGTERM first. Descendants that ignore SIGTERM must still
+        // be reaped before runCodex resolves.
+        killEscalation = new Promise<void>((done) => {
+          killTimer = setTimeout(() => {
+            void forceReapProcessGroup(groupPid).finally(() => {
+              finishKillEscalation();
+              done();
+            });
+          }, killGraceMs);
+        });
+
+        trySettle();
+      }, input.timeoutMs);
+
       spawned.once("error", (error) => {
         fail(error);
       });
       spawned.once("close", (code, signal) => {
-        finish({
+        closeResult = {
           exitCode: code ?? 1,
           signal,
           timedOut,
-        });
+        };
+        if (!timedOut) {
+          clearTimeoutTimer();
+          trySettle();
+          return;
+        }
+        // Leader closed after timeout: do NOT clear killTimer.
+        trySettle();
       });
     });
   } finally {
-    clearTimers();
+    clearTimeoutTimer();
+    // Never cancel an armed kill escalation from finally before it runs;
+    // await it so SIGTERM-resistant descendants are reaped first.
+    if (killEscalation) {
+      await killEscalation;
+    } else {
+      clearKillTimer();
+    }
     if (child?.stdout && events && !events.destroyed) {
       child.stdout.unpipe(events);
     }
