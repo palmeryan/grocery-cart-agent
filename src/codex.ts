@@ -69,7 +69,7 @@ export function buildCodexInvocation(
       "-c",
       "mcp_servers.playwright.enabled=true",
       "-c",
-      'mcp_servers.playwright.default_tools_approval_mode="auto"',
+      'mcp_servers.playwright.default_tools_approval_mode="approve"',
       "-c",
       "mcp_servers.playwright.startup_timeout_sec=30",
       "-c",

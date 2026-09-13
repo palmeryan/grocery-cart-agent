@@ -33,11 +33,24 @@ describe("Codex invocation", () => {
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
     });
+    const joined = invocation.args.join(" ");
+    expect(invocation.args).toContain("--sandbox");
     expect(invocation.args).toContain("read-only");
     expect(invocation.args).toContain("--ignore-user-config");
-    expect(invocation.args.join(" ")).not.toContain("dangerously-bypass");
-    expect(invocation.args.join(" ")).toContain("--user-data-dir");
-    expect(invocation.args.join(" ")).toContain("--caps=devtools");
+    expect(invocation.args).toContain('approval_policy="never"');
+    expect(invocation.args).toContain(
+      'mcp_servers.playwright.default_tools_approval_mode="approve"',
+    );
+    expect(joined).not.toContain(
+      'mcp_servers.playwright.default_tools_approval_mode="auto"',
+    );
+    expect(joined).not.toContain("dangerously-bypass");
+    expect(joined).not.toContain("--approve-for-me");
+    expect(joined).not.toContain("workspace-write");
+    expect(joined).not.toContain("--skip-git-repo-check");
+    expect(joined).toContain("--user-data-dir");
+    expect(joined).toContain("--caps=devtools");
+    expect(joined).toContain("--output-dir=/repo/runs/id/browser");
   });
 
   it("passes request content through stdin, never command arguments", () => {

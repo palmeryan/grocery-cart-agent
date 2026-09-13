@@ -22,6 +22,7 @@ describe("cart prompt", () => {
       requestSha256: "b".repeat(64),
       expectedPostalCode: "02139",
       previousReport: null,
+      browserOutputDir: "/repo/runs/id/browser",
     });
     expect(prompt).toContain("02139");
     expect(prompt).toContain("Chicken stir-fry");
@@ -34,10 +35,32 @@ describe("cart prompt", () => {
       requestSha256: "b".repeat(64),
       expectedPostalCode: "02139",
       previousReport: prior,
+      browserOutputDir: "/repo/runs/id/browser",
     });
     expect(prompt).toContain("NEVER open or enter checkout");
     expect(prompt).toContain("Do not change an address or payment setting");
     expect(prompt).toContain("Stop immediately");
     expect(prompt).toContain("PREVIOUS REPORT FOR CONTROLLED RERUN");
+  });
+
+  it("requires the final screenshot under the absolute browser output directory", () => {
+    const browserOutputDir = "/repo/runs/abc123/browser";
+    const prompt = renderPrompt({
+      request,
+      requestSha256: "b".repeat(64),
+      expectedPostalCode: "02139",
+      previousReport: null,
+      browserOutputDir,
+    });
+    expect(prompt).toContain(`BROWSER OUTPUT DIRECTORY: ${browserOutputDir}`);
+    expect(prompt).toContain(`${browserOutputDir}/final-state.png`);
+    expect(prompt).toMatch(
+      /browser_take_screenshot[\s\S]*final-state\.png|final-state\.png[\s\S]*browser_take_screenshot/,
+    );
+    // Path must be labeled as output config, not free-form request text.
+    const outputDirIndex = prompt.indexOf("BROWSER OUTPUT DIRECTORY:");
+    const groceryRequestIndex = prompt.indexOf("GROCERY REQUEST:");
+    expect(outputDirIndex).toBeGreaterThan(-1);
+    expect(groceryRequestIndex).toBeGreaterThan(outputDirIndex);
   });
 });

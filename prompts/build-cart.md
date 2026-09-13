@@ -40,7 +40,9 @@ RERUN:
 FINISH:
 1. Inspect the Whole Foods cart without opening checkout.
 2. Compare changes with the baseline and request.
-3. Capture a final screenshot.
+3. Capture a final screenshot with browser_take_screenshot using the absolute
+   FINAL SCREENSHOT PATH under BROWSER OUTPUT DIRECTORY (…/final-state.png).
+   Do not pass a bare relative filename.
 4. Stop Playwright tracing with browser_stop_tracing so the trace is saved.
 5. Return only JSON matching the supplied output schema.
 6. Set checkoutVisited or settingsChanged truthfully; either must make the run

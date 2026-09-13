@@ -65,6 +65,7 @@ export async function runCli(
         requestSha256,
         expectedPostalCode: config.expectedPostalCode,
         previousReport,
+        browserOutputDir: paths.browserOutputDir,
       });
       const invoke = dependencies.invokeCodex ?? (async () => {
         const invocation = buildCodexInvocation({

@@ -14,6 +14,7 @@ describe("cart CLI", () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-"));
     const request = join(root, "request.json");
     cpSync(new URL("fixtures/valid-request.json", import.meta.url), request);
+    let capturedPrompt = "";
     const exitCode = await runCli(["build", request], {
       rootDir: root,
       env: {
@@ -21,7 +22,8 @@ describe("cart CLI", () => {
         WFM_EXPECTED_POSTAL_CODE: "02139",
         PLAYWRIGHT_MCP_BIN: "/usr/bin/true",
       },
-      invokeCodex: async ({ reportPath, requestSha256 }) => {
+      invokeCodex: async ({ reportPath, requestSha256, prompt }) => {
+        capturedPrompt = prompt;
         const report = JSON.parse(
           readFileSync(
             new URL("fixtures/valid-report.json", import.meta.url),
@@ -34,6 +36,11 @@ describe("cart CLI", () => {
       },
     });
     expect(exitCode).toBe(0);
+    expect(capturedPrompt).toContain("BROWSER OUTPUT DIRECTORY:");
+    expect(capturedPrompt).toMatch(
+      /BROWSER OUTPUT DIRECTORY: .*\/runs\/[^/\s]+\/browser/,
+    );
+    expect(capturedPrompt).toMatch(/\/runs\/[^/\s]+\/browser\/final-state\.png/);
   });
 
   it("fails before Codex when request validation fails", async () => {
