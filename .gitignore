@@ -1,1 +1,10 @@
+node_modules/
+dist/
+.env
+.DS_Store
+runs/
+.wfm-cart.lock
+playwright-profile/
+*.log
 .worktrees/
+.superpowers/
