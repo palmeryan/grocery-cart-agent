@@ -1,4 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,9 +75,68 @@ describe("Codex process", () => {
       eventsPath: join(runDir, "events.jsonl"),
       stderrPath: join(runDir, "stderr.log"),
       timeoutMs: 50,
+      killGraceMs: 50,
     });
     expect(result.timedOut).toBe(true);
     expect(result.exitCode).not.toBe(0);
     expect(existsSync(join(runDir, "events.jsonl"))).toBe(true);
+  });
+
+  it("kills descendant processes in the same process group on timeout", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-pg-"));
+    const markerPath = join(runDir, "descendant.pid");
+    const result = await runCodex({
+      executable: process.execPath,
+      args: [fakeCodex, "--spawn-descendant", markerPath],
+      prompt: "test",
+      eventsPath: join(runDir, "events.jsonl"),
+      stderrPath: join(runDir, "stderr.log"),
+      timeoutMs: 200,
+      killGraceMs: 100,
+    });
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(markerPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(existsSync(markerPath)).toBe(true);
+    const descendantPid = Number(readFileSync(markerPath, "utf8"));
+    expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
+
+    const alive = (): boolean => {
+      try {
+        process.kill(descendantPid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const stop = Date.now() + 2_000;
+    while (alive() && Date.now() < stop) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(alive()).toBe(false);
+  });
+
+  it("fails fast when an exclusive log file cannot be opened", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-log-"));
+    const eventsPath = join(runDir, "events.jsonl");
+    const stderrPath = join(runDir, "stderr.log");
+    writeFileSync(eventsPath, "occupied\n", { mode: 0o600 });
+
+    await expect(
+      runCodex({
+        executable: process.execPath,
+        args: [fakeCodex],
+        prompt: "test",
+        eventsPath,
+        stderrPath,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+
+    expect(existsSync(stderrPath)).toBe(false);
   });
 });
