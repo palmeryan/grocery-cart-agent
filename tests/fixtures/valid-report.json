@@ -1,0 +1,28 @@
+{
+  "runStatus": "completed",
+  "requestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "authenticated": true,
+  "expectedLocationConfirmed": true,
+  "wholeFoodsStorefrontConfirmed": true,
+  "checkoutVisited": false,
+  "settingsChanged": false,
+  "baselineCartCount": 0,
+  "baselineItems": [],
+  "finalCartCount": 1,
+  "finalCartDelta": [{
+    "productName": "365 Boneless Skinless Chicken Thighs",
+    "quantity": 1
+  }],
+  "selections": [{
+    "ingredientId": "chicken",
+    "requested": "about 1.5 lb chicken thighs",
+    "status": "added",
+    "productName": "365 Boneless Skinless Chicken Thighs",
+    "packageSize": "1.5-2.5 lb",
+    "quantity": 1,
+    "price": "$5.99/lb",
+    "rationale": "Boneless thighs fit the quick stir-fry context.",
+    "confidence": "high"
+  }],
+  "failureReason": null
+}

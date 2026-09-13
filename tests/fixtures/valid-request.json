@@ -1,0 +1,13 @@
+{
+  "recipes": [{
+    "id": "stir-fry",
+    "name": "Chicken stir-fry",
+    "servings": 2,
+    "context": "Quick weeknight dish; boneless meat preferred",
+    "ingredients": [{
+      "id": "chicken",
+      "request": "about 1.5 lb chicken thighs",
+      "preferences": ["boneless", "skinless"]
+    }]
+  }]
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runStatus",
+    "requestSha256",
+    "authenticated",
+    "expectedLocationConfirmed",
+    "wholeFoodsStorefrontConfirmed",
+    "checkoutVisited",
+    "settingsChanged",
+    "baselineCartCount",
+    "baselineItems",
+    "finalCartCount",
+    "finalCartDelta",
+    "selections",
+    "failureReason"
+  ],
+  "properties": {
+    "runStatus": { "enum": ["completed", "partial", "failed"] },
+    "requestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "authenticated": { "type": "boolean" },
+    "expectedLocationConfirmed": { "type": "boolean" },
+    "wholeFoodsStorefrontConfirmed": { "type": "boolean" },
+    "checkoutVisited": { "type": "boolean" },
+    "settingsChanged": { "type": "boolean" },
+    "baselineCartCount": { "type": "integer", "minimum": 0 },
+    "baselineItems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["productName", "quantity"],
+        "properties": {
+          "productName": { "type": "string", "minLength": 1 },
+          "quantity": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "finalCartCount": { "type": "integer", "minimum": 0 },
+    "finalCartDelta": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["productName", "quantity"],
+        "properties": {
+          "productName": { "type": "string", "minLength": 1 },
+          "quantity": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "selections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ingredientId",
+          "requested",
+          "status",
+          "productName",
+          "packageSize",
+          "quantity",
+          "price",
+          "rationale",
+          "confidence"
+        ],
+        "properties": {
+          "ingredientId": { "type": "string", "minLength": 1 },
+          "requested": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["added", "already_present", "skipped"] },
+          "productName": { "type": ["string", "null"] },
+          "packageSize": { "type": ["string", "null"] },
+          "quantity": { "type": "integer", "minimum": 0 },
+          "price": { "type": ["string", "null"] },
+          "rationale": { "type": "string", "minLength": 1 },
+          "confidence": { "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "failureReason": { "type": ["string", "null"] }
+  }
+}
