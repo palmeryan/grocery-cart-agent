@@ -1,0 +1,20 @@
+{
+  "recipes": [{
+    "id": "breakfast-tacos",
+    "name": "Breakfast tacos",
+    "servings": 4,
+    "context": "Weeknight breakfast tacos; standard dairy is desired",
+    "ingredients": [
+      { "id": "eggs", "request": "1 dozen large eggs" },
+      { "id": "tortillas", "request": "one package small flour tortillas" },
+      { "id": "cheddar", "request": "8 oz sharp cheddar cheese" },
+      { "id": "salsa", "request": "one 12-16 oz jar mild red salsa" },
+      { "id": "avocados", "request": "2 ripe avocados" },
+      { "id": "cilantro", "request": "1 bunch fresh cilantro" },
+      { "id": "limes", "request": "2 fresh limes" },
+      { "id": "beans", "request": "one 15 oz can black beans" },
+      { "id": "onion", "request": "1 small yellow onion" },
+      { "id": "yogurt", "request": "one small tub plain Greek yogurt", "preferences": ["whole milk"] }
+    ]
+  }]
+}

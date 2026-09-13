@@ -1,0 +1,20 @@
+{
+  "recipes": [{
+    "id": "pasta-primavera",
+    "name": "Pasta primavera",
+    "servings": 4,
+    "context": "Creamy weeknight pasta; a similar short wheat pasta shape is acceptable, but gluten-free pasta and nondairy cream are not",
+    "ingredients": [
+      { "id": "short-pasta", "request": "one 12-16 oz box penne or similar short wheat pasta" },
+      { "id": "zucchini", "request": "2 medium zucchini" },
+      { "id": "cherry-tomatoes", "request": "one pint cherry tomatoes" },
+      { "id": "asparagus", "request": "1 bunch fresh asparagus" },
+      { "id": "frozen-peas", "request": "one 10-16 oz bag frozen green peas" },
+      { "id": "parmesan", "request": "about 6 oz Parmesan cheese", "preferences": ["wedge"] },
+      { "id": "basil", "request": "1 package fresh basil" },
+      { "id": "lemon", "request": "1 fresh lemon" },
+      { "id": "heavy-cream", "request": "one pint dairy heavy cream" },
+      { "id": "garlic", "request": "1 bulb fresh garlic" }
+    ]
+  }]
+}

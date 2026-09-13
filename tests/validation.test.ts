@@ -21,6 +21,14 @@ describe("request validation", () => {
     expect(() => loadRequest(fixture("invalid-request.json")))
       .toThrow(ValidationFailure);
   });
+
+  it.each(["staples.json", "ambiguous.json", "substitutions.json"])(
+    "validates acceptance fixture %s",
+    (name) => {
+      const path = fileURLToPath(new URL(`../examples/${name}`, import.meta.url));
+      expect(loadRequest(path).recipes).toHaveLength(1);
+    },
+  );
 });
 
 describe("report validation", () => {

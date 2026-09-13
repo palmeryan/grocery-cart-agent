@@ -1,0 +1,20 @@
+{
+  "recipes": [{
+    "id": "chicken-stir-fry",
+    "name": "Chicken stir-fry",
+    "servings": 4,
+    "context": "Quick high-heat stir-fry; use boneless meat and fresh vegetables",
+    "ingredients": [
+      { "id": "chicken-thighs", "request": "about 1.5 lb chicken thighs", "preferences": ["boneless", "skinless"] },
+      { "id": "broccoli", "request": "about 1 lb fresh broccoli crowns" },
+      { "id": "bell-peppers", "request": "2 red bell peppers" },
+      { "id": "scallions", "request": "1 bunch scallions" },
+      { "id": "ginger", "request": "one 2-inch piece fresh ginger" },
+      { "id": "garlic", "request": "1 bulb fresh garlic" },
+      { "id": "soy-sauce", "request": "one 10-15 oz bottle low-sodium soy sauce" },
+      { "id": "jasmine-rice", "request": "one 2 lb bag jasmine rice" },
+      { "id": "sesame-oil", "request": "one small bottle toasted sesame oil" },
+      { "id": "cornstarch", "request": "one small box cornstarch" }
+    ]
+  }]
+}
