@@ -10,9 +10,9 @@
     "interactionPerformed"
   ],
   "properties": {
-    "connected": { "type": "boolean" },
-    "url": { "type": "string" },
-    "title": { "type": "string" },
+    "connected": { "const": true },
+    "url": { "const": "https://example.com/" },
+    "title": { "const": "Example Domain" },
     "navigationPerformed": { "type": "boolean" },
     "interactionPerformed": { "type": "boolean" }
   }

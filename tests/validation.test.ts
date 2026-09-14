@@ -263,13 +263,46 @@ describe("harmless attachment report validation", () => {
     ).not.toThrow();
   });
 
-  it("rejects navigation or interaction evidence", () => {
+  it.each([
+    ["connected", false],
+    ["url", "https://not-example.com/"],
+    ["title", "Wrong Title"],
+  ] as const)("parse rejects invalid %s", (field, value) => {
+    const report = {
+      connected: true,
+      url: "https://example.com/",
+      title: "Example Domain",
+      navigationPerformed: false,
+      interactionPerformed: false,
+      [field]: value,
+    };
+    expect(() => parseAttachmentReport(JSON.stringify(report))).toThrow(
+      ValidationFailure,
+    );
+  });
+
+  it("rejects navigation evidence via safety gate", () => {
     const report = {
       connected: true,
       url: "https://example.com/",
       title: "Example Domain",
       navigationPerformed: true,
       interactionPerformed: false,
+    };
+    expect(() =>
+      assertAttachmentReportSafe(
+        parseAttachmentReport(JSON.stringify(report)),
+      ),
+    ).toThrow("performed a prohibited action");
+  });
+
+  it("rejects interaction evidence via safety gate", () => {
+    const report = {
+      connected: true,
+      url: "https://example.com/",
+      title: "Example Domain",
+      navigationPerformed: false,
+      interactionPerformed: true,
     };
     expect(() =>
       assertAttachmentReportSafe(
