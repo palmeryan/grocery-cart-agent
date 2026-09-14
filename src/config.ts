@@ -1,4 +1,4 @@
-import { homedir, userInfo } from "node:os";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 export interface AppConfig {
@@ -13,9 +13,6 @@ export interface AppConfig {
   chromeExecutable: string;
   chromeStartupTimeoutMs: number;
   chromeStopTimeoutMs: number;
-  keychainService: string;
-  keychainAccount: string;
-  playwrightMcpShim: string;
 }
 
 const parsePositiveInt = (
@@ -74,10 +71,5 @@ export function loadConfig(
       10_000,
       "WFM_CHROME_STOP_TIMEOUT_MS",
     ),
-    keychainService: "whole-foods-cart.playwright-extension",
-    keychainAccount: env.USER ?? userInfo().username,
-    playwrightMcpShim:
-      env.PLAYWRIGHT_MCP_SHIM ??
-      join(absoluteRoot, "scripts", "playwright-extension-mcp.sh"),
   };
 }

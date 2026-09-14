@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:net";
 import type {
   BrowserStopResult,
   OwnedChromeSession,
@@ -32,6 +33,7 @@ export interface LaunchChromeInput {
   startupTimeoutMs: number;
   stopTimeoutMs: number;
   launchUrl?: string;
+  remoteDebuggingPort?: number;
   spawnChrome?: SpawnChrome;
   listProfilePids?: () => number[];
   signalGroup?: (pid: number, signal: NodeJS.Signals) => void;
@@ -40,7 +42,7 @@ export interface LaunchChromeInput {
 }
 
 const POLL_MS = 100;
-const DEFAULT_URL = "https://www.amazon.com/wholefoods";
+const DEFAULT_URL = "https://www.wholefoodsmarket.com/grocery/search";
 
 export class BrowserLaunchError extends Error {
   constructor(
@@ -69,6 +71,29 @@ const defaultSleep = (ms: number): Promise<void> =>
   });
 
 const defaultNow = (): number => Date.now();
+
+/** Reserve a localhost port for Chrome's remote debugging endpoint. */
+export async function reserveLocalPort(): Promise<number> {
+  const server = createServer();
+  return await new Promise<number>((resolve, reject) => {
+    const fail = (error: Error): void => {
+      server.close();
+      reject(error);
+    };
+    server.once("error", fail);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        fail(new Error("Could not reserve a localhost port"));
+        return;
+      }
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve(address.port);
+      });
+    });
+  });
+}
 
 const defaultSpawnChrome: SpawnChrome = (executable, args, options) =>
   spawn(executable, args, options);
@@ -156,6 +181,9 @@ export async function launchOwnedChrome(
     `--user-data-dir=${input.profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    ...(input.remoteDebuggingPort === undefined
+      ? []
+      : [`--remote-debugging-port=${input.remoteDebuggingPort}`]),
     input.launchUrl ?? DEFAULT_URL,
   ];
 
@@ -253,6 +281,9 @@ export async function launchOwnedChrome(
 
   return {
     pid: ownedPid,
+    ...(input.remoteDebuggingPort === undefined
+      ? {}
+      : { remoteDebuggingPort: input.remoteDebuggingPort }),
     stop,
   };
 }

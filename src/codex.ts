@@ -12,8 +12,7 @@ export interface CodexInvocationInput {
   reportPath: string;
   schemaPath: string;
   playwrightMcpBin: string;
-  playwrightMcpShim: string;
-  profileDir: string;
+  remoteDebuggingPort: number;
 }
 
 export interface CodexInvocation {
@@ -47,9 +46,11 @@ export function buildCodexInvocation(
   input: CodexInvocationInput,
 ): CodexInvocation {
   const mcpArgs = [
-    input.playwrightMcpBin,
+    "--cdp-endpoint",
+    `http://127.0.0.1:${input.remoteDebuggingPort}`,
+    "--output-dir",
     input.browserOutputDir,
-    input.profileDir,
+    "--caps=devtools",
   ];
   return {
     args: [
@@ -73,7 +74,7 @@ export function buildCodexInvocation(
       "-c",
       'approval_policy="never"',
       "-c",
-      `mcp_servers.playwright.command=${JSON.stringify(input.playwrightMcpShim)}`,
+      `mcp_servers.playwright.command=${JSON.stringify(input.playwrightMcpBin)}`,
       "-c",
       `mcp_servers.playwright.args=${JSON.stringify(mcpArgs)}`,
       "-c",

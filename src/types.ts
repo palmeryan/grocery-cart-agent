@@ -70,6 +70,7 @@ export interface BrowserStopResult {
 
 export interface OwnedChromeSession {
   pid: number;
+  remoteDebuggingPort?: number;
   stop(): Promise<BrowserStopResult>;
 }
 

@@ -45,9 +45,20 @@ describe("cart prompt", () => {
     expect(prompt).toContain("Do not change the saved address or payment setting");
     expect(prompt).toContain("report failure when the delivery context");
     expect(prompt).toContain("Use the current controlled page");
-    expect(prompt).toContain("Do not create tabs");
+    expect(prompt).toContain(
+      "https://www.wholefoodsmarket.com/grocery/search",
+    );
+    expect(prompt).toMatch(/Do not\s+create tabs/);
+    expect(prompt).toContain("sole adaptive browser agent");
+    expect(prompt).toContain("Do not expect a precomputed candidate list");
+    expect(prompt).toContain("weighted products");
+    expect(prompt).toContain("quantity selector");
+    expect(prompt).toContain("click the resulting Add to Cart");
+    expect(prompt).toContain("A quantity selector by itself is not a verified");
     expect(prompt).toMatch(/Do not\s+click the location control/);
     expect(prompt).toContain("If 43214 appears anywhere in the page");
+    expect(prompt).toMatch(/cart may still label its\s+store block "Pickup Location"/);
+    expect(prompt).toMatch(/report delivery as confirmed even if the cart's\s+store/);
     expect(prompt).toContain("PREVIOUS REPORT FOR CONTROLLED RERUN");
   });
 
@@ -79,9 +90,9 @@ describe("auth-only prompt", () => {
       deliveryMode: "delivery",
       browserOutputDir: "/repo/runs/id/browser",
     });
-    expect(prompt).toContain("Confirm that Amazon is authenticated");
-    expect(prompt).toContain("Use the current controlled page");
-    expect(prompt).toContain("Do not create tabs");
+    expect(prompt).toContain("Confirm that the Whole Foods Market account is authenticated");
+    expect(prompt).toContain("Use the current controlled page on `www.wholefoodsmarket.com`");
+    expect(prompt).toMatch(/Do not\s+create tabs/);
     expect(prompt).toMatch(/Do\s+not click the location control/);
     expect(prompt).toContain("If 43214 appears anywhere in the page");
     expect(prompt).toContain("DELIVERY MODE: delivery");
