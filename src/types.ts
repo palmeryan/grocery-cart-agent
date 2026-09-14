@@ -70,3 +70,21 @@ export interface OwnedChromeSession {
   pid: number;
   stop(): Promise<BrowserStopResult>;
 }
+
+export interface AuthReport {
+  runStatus: "completed" | "failed";
+  authenticated: boolean;
+  expectedLocationConfirmed: boolean;
+  wholeFoodsStorefrontConfirmed: boolean;
+  checkoutVisited: boolean;
+  settingsChanged: boolean;
+  failureReason: string | null;
+}
+
+export interface AttachmentReport {
+  connected: boolean;
+  url: "https://example.com/";
+  title: "Example Domain";
+  navigationPerformed: boolean;
+  interactionPerformed: boolean;
+}

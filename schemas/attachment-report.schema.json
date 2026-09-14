@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "connected",
+    "url",
+    "title",
+    "navigationPerformed",
+    "interactionPerformed"
+  ],
+  "properties": {
+    "connected": { "type": "boolean" },
+    "url": { "type": "string" },
+    "title": { "type": "string" },
+    "navigationPerformed": { "type": "boolean" },
+    "interactionPerformed": { "type": "boolean" }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runStatus",
+    "authenticated",
+    "expectedLocationConfirmed",
+    "wholeFoodsStorefrontConfirmed",
+    "checkoutVisited",
+    "settingsChanged",
+    "failureReason"
+  ],
+  "properties": {
+    "runStatus": { "enum": ["completed", "failed"] },
+    "authenticated": { "type": "boolean" },
+    "expectedLocationConfirmed": { "type": "boolean" },
+    "wholeFoodsStorefrontConfirmed": { "type": "boolean" },
+    "checkoutVisited": { "type": "boolean" },
+    "settingsChanged": { "type": "boolean" },
+    "failureReason": { "type": ["string", "null"] }
+  }
+}

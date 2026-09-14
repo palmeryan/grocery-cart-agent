@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CartReport, GroceryRequest } from "./types.js";
 
@@ -11,8 +12,23 @@ export interface PromptInput {
   browserOutputDir: string;
 }
 
+export interface AuthPromptInput {
+  expectedPostalCode: string;
+  browserOutputDir: string;
+}
+
 const templatePath = fileURLToPath(
   new URL("../prompts/build-cart.md", import.meta.url),
+);
+
+const authTemplate = readFileSync(
+  fileURLToPath(new URL("../prompts/auth-check.md", import.meta.url)),
+  "utf8",
+);
+
+const attachmentTemplate = readFileSync(
+  fileURLToPath(new URL("../prompts/attachment-check.md", import.meta.url)),
+  "utf8",
 );
 
 export function renderPrompt(input: PromptInput): string {
@@ -40,4 +56,19 @@ export function renderPrompt(input: PromptInput): string {
     prior,
     `GROCERY REQUEST:\n${JSON.stringify(input.request, null, 2)}`,
   ].join("\n\n");
+}
+
+export function renderAuthPrompt(input: AuthPromptInput): string {
+  return [
+    authTemplate.trim(),
+    "",
+    `EXPECTED POSTAL CODE: ${input.expectedPostalCode}`,
+    `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
+    `AUTH SCREENSHOT PATH: ${join(input.browserOutputDir, "auth-state.png")}`,
+    "",
+  ].join("\n");
+}
+
+export function renderAttachmentPrompt(): string {
+  return `${attachmentTemplate.trim()}\n`;
 }

@@ -5,7 +5,12 @@ import {
   type ErrorObject,
   type ValidateFunction,
 } from "ajv/dist/2020.js";
-import type { CartReport, GroceryRequest } from "./types.js";
+import type {
+  AttachmentReport,
+  AuthReport,
+  CartReport,
+  GroceryRequest,
+} from "./types.js";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 
@@ -16,6 +21,10 @@ const compile = (relativePath: string): ValidateFunction => {
 
 const requestValidator = compile("../schemas/request.schema.json");
 const reportValidator = compile("../schemas/report.schema.json");
+const authReportValidator = compile("../schemas/auth-report.schema.json");
+const attachmentReportValidator = compile(
+  "../schemas/attachment-report.schema.json",
+);
 
 const formatErrors = (errors: ErrorObject[] | null | undefined): string =>
   (errors ?? [])
@@ -23,7 +32,10 @@ const formatErrors = (errors: ErrorObject[] | null | undefined): string =>
     .join("; ");
 
 export class ValidationFailure extends Error {
-  constructor(kind: "request" | "report", errors: ErrorObject[] | null | undefined) {
+  constructor(
+    kind: "request" | "report" | "auth report" | "attachment report",
+    errors: ErrorObject[] | null | undefined,
+  ) {
     super(`Invalid ${kind}: ${formatErrors(errors)}`);
     this.name = "ValidationFailure";
   }
@@ -131,6 +143,63 @@ export function assertReportPreflight(report: CartReport): void {
   ) {
     throw new Error(
       'Report preflight failed: runStatus "completed" cannot include skipped selections',
+    );
+  }
+}
+
+export function parseAttachmentReport(text: string): AttachmentReport {
+  const value: unknown = JSON.parse(text);
+  if (!attachmentReportValidator(value)) {
+    throw new ValidationFailure(
+      "attachment report",
+      attachmentReportValidator.errors,
+    );
+  }
+  return value as AttachmentReport;
+}
+
+export function assertAttachmentReportSafe(
+  report: AttachmentReport,
+): void {
+  if (report.navigationPerformed || report.interactionPerformed) {
+    throw new Error("Attachment check performed a prohibited action");
+  }
+  if (
+    !report.connected ||
+    report.url !== "https://example.com/" ||
+    report.title !== "Example Domain"
+  ) {
+    throw new Error("Attachment check did not observe Example Domain");
+  }
+}
+
+export function parseAuthReport(text: string): AuthReport {
+  const value: unknown = JSON.parse(text);
+  if (!authReportValidator(value)) {
+    throw new ValidationFailure("auth report", authReportValidator.errors);
+  }
+  return value as AuthReport;
+}
+
+export function assertAuthReportSafe(report: AuthReport): void {
+  if (report.checkoutVisited || report.settingsChanged) {
+    throw new Error("Auth check crossed a prohibited safety boundary");
+  }
+  const missing = (
+    [
+      ["authenticated", report.authenticated],
+      ["expectedLocationConfirmed", report.expectedLocationConfirmed],
+      [
+        "wholeFoodsStorefrontConfirmed",
+        report.wholeFoodsStorefrontConfirmed,
+      ],
+    ] as const
+  )
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+  if (report.runStatus !== "completed" || missing.length > 0) {
+    throw new Error(
+      `Auth check failed${missing.length > 0 ? `: ${missing.join(", ")}` : ""}`,
     );
   }
 }

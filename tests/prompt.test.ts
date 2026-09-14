@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { renderPrompt } from "../src/prompt.js";
+import {
+  renderAttachmentPrompt,
+  renderAuthPrompt,
+  renderPrompt,
+} from "../src/prompt.js";
 import type { CartReport, GroceryRequest } from "../src/types.js";
 
 const fixture = (name: string) =>
@@ -62,5 +66,35 @@ describe("cart prompt", () => {
     const groceryRequestIndex = prompt.indexOf("GROCERY REQUEST:");
     expect(outputDirIndex).toBeGreaterThan(-1);
     expect(groceryRequestIndex).toBeGreaterThan(outputDirIndex);
+  });
+});
+
+describe("auth-only prompt", () => {
+  it("allows only non-mutating auth and storefront checks", () => {
+    const prompt = renderAuthPrompt({
+      expectedPostalCode: "00000",
+      browserOutputDir: "/repo/runs/id/browser",
+    });
+    expect(prompt).toContain("Confirm that Amazon is authenticated");
+    expect(prompt).toContain("00000");
+    expect(prompt).toContain("/repo/runs/id/browser/auth-state.png");
+    expect(prompt).toContain("NEVER inspect cart contents");
+    expect(prompt).toContain("NEVER search for products");
+    expect(prompt).toContain("NEVER add, remove, or change cart items");
+    expect(prompt).toContain("NEVER open or enter checkout");
+    expect(prompt).toContain("NEVER expose an account name");
+    expect(prompt).not.toContain("FOR EACH INGREDIENT");
+    expect(prompt).not.toContain("GROCERY REQUEST");
+  });
+});
+
+describe("harmless attachment prompt", () => {
+  it("permits only observation of Example Domain", () => {
+    const prompt = renderAttachmentPrompt();
+    expect(prompt).toContain("https://example.com");
+    expect(prompt).toContain("Do not navigate");
+    expect(prompt).toContain("Do not click, type, or submit");
+    expect(prompt).not.toContain("Amazon");
+    expect(prompt).not.toContain("cart");
   });
 });

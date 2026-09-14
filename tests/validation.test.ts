@@ -5,10 +5,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  assertAttachmentReportSafe,
+  assertAuthReportSafe,
   assertReportMatchesRequest,
   assertReportPreflight,
   ValidationFailure,
   loadRequest,
+  parseAttachmentReport,
+  parseAuthReport,
   parseReport,
 } from "../src/validation.js";
 
@@ -211,5 +215,66 @@ describe("report validation", () => {
     report.selections[0]!.quantity = 0;
     report.selections[0]!.price = null;
     expect(() => assertReportPreflight(report)).not.toThrow();
+  });
+});
+
+const validAuthReport = () =>
+  JSON.parse(
+    readFileSync(
+      new URL("fixtures/valid-auth-report.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+describe("auth report validation", () => {
+  it("accepts a successful non-mutating auth report", () => {
+    const report = parseAuthReport(JSON.stringify(validAuthReport()));
+    expect(() => assertAuthReportSafe(report)).not.toThrow();
+  });
+
+  it.each([
+    ["authenticated", false],
+    ["expectedLocationConfirmed", false],
+    ["wholeFoodsStorefrontConfirmed", false],
+    ["checkoutVisited", true],
+    ["settingsChanged", true],
+  ] as const)("rejects an unsafe or incomplete %s result", (field, value) => {
+    const report = validAuthReport();
+    report[field] = value;
+    expect(() =>
+      assertAuthReportSafe(parseAuthReport(JSON.stringify(report))),
+    ).toThrow();
+  });
+
+  it("rejects cart-shaped fields", () => {
+    const report = { ...validAuthReport(), selections: [] };
+    expect(() => parseAuthReport(JSON.stringify(report))).toThrow();
+  });
+});
+
+describe("harmless attachment report validation", () => {
+  it("accepts only the fixed Example Domain result", () => {
+    const text = readFileSync(
+      new URL("fixtures/valid-attachment-report.json", import.meta.url),
+      "utf8",
+    );
+    expect(() =>
+      assertAttachmentReportSafe(parseAttachmentReport(text)),
+    ).not.toThrow();
+  });
+
+  it("rejects navigation or interaction evidence", () => {
+    const report = {
+      connected: true,
+      url: "https://example.com/",
+      title: "Example Domain",
+      navigationPerformed: true,
+      interactionPerformed: false,
+    };
+    expect(() =>
+      assertAttachmentReportSafe(
+        parseAttachmentReport(JSON.stringify(report)),
+      ),
+    ).toThrow("performed a prohibited action");
   });
 });
