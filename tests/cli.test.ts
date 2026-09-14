@@ -14,8 +14,33 @@ import type { CodexResult } from "../src/codex.js";
 
 const baseEnv = (root: string) => ({
   HOME: root,
-  WFM_EXPECTED_POSTAL_CODE: "02139",
+  USER: "test",
+  WFM_EXPECTED_POSTAL_CODE: "00000",
   PLAYWRIGHT_MCP_BIN: "/usr/bin/true",
+  PLAYWRIGHT_MCP_SHIM: "/usr/bin/true",
+  CHROME_EXECUTABLE: "/usr/bin/true",
+});
+
+const lifecycleDependencies = (
+  root: string,
+  events: string[],
+  stopResult = { stopped: true, remainingProfilePids: [] as number[] },
+) => ({
+  rootDir: root,
+  env: baseEnv(root),
+  checkExtensionToken: () => {
+    events.push("token-check");
+  },
+  launchBrowser: async () => {
+    events.push("chrome-start");
+    return {
+      pid: 4242,
+      stop: async () => {
+        events.push("chrome-stop");
+        return stopResult;
+      },
+    };
+  },
 });
 
 const writeValidRequest = (root: string): string => {
@@ -53,10 +78,10 @@ describe("cart CLI", () => {
   it("validates, runs Codex, validates the report, and returns success", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     let capturedPrompt = "";
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath, requestSha256, prompt }) => {
         capturedPrompt = prompt;
         writeReport(reportPath, requestSha256);
@@ -75,10 +100,10 @@ describe("cart CLI", () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-"));
     const request = join(root, "request.json");
     cpSync(new URL("fixtures/invalid-request.json", import.meta.url), request);
+    const events: string[] = [];
     let called = false;
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async () => {
         called = true;
         return { exitCode: 0, signal: null, timedOut: false };
@@ -91,9 +116,9 @@ describe("cart CLI", () => {
   it("releases the profile lock when Codex throws", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const dependencies = {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async (): Promise<never> => {
         throw new Error("synthetic Codex failure");
       },
@@ -111,9 +136,9 @@ describe("cart CLI", () => {
     async (_field, patch) => {
       const root = mkdtempSync(join(tmpdir(), "wfm-cli-preflight-"));
       const request = writeValidRequest(root);
+      const events: string[] = [];
       const exitCode = await runCli(["build", request], {
-        rootDir: root,
-        env: baseEnv(root),
+        ...lifecycleDependencies(root, events),
         invokeCodex: async ({ reportPath, requestSha256 }) => {
           writeReport(reportPath, requestSha256, patch);
           return { exitCode: 0, signal: null, timedOut: false };
@@ -123,8 +148,7 @@ describe("cart CLI", () => {
       // Lock must be released for a subsequent run.
       expect(
         await runCli(["build", request], {
-          rootDir: root,
-          env: baseEnv(root),
+          ...lifecycleDependencies(root, events),
           invokeCodex: async ({ reportPath, requestSha256 }) => {
             writeReport(reportPath, requestSha256);
             return { exitCode: 0, signal: null, timedOut: false };
@@ -137,9 +161,9 @@ describe("cart CLI", () => {
   it("rejects completed reports that contain skipped selections", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-skipped-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath, requestSha256 }) => {
         const report = loadValidReport();
         report.requestSha256 = requestSha256;
@@ -164,9 +188,9 @@ describe("cart CLI", () => {
   it("allows partial reports with skipped selections to exit 0", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-partial-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath, requestSha256 }) => {
         const report = loadValidReport();
         report.requestSha256 = requestSha256;
@@ -191,9 +215,9 @@ describe("cart CLI", () => {
   it("returns 1 for failed runStatus after successful Codex exit", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-failed-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath, requestSha256 }) => {
         writeReport(reportPath, requestSha256, {
           runStatus: "failed",
@@ -208,9 +232,9 @@ describe("cart CLI", () => {
   it("returns 1 for failed report with authenticated false (honest auth failure)", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-failed-auth-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath, requestSha256 }) => {
         writeReport(reportPath, requestSha256, {
           runStatus: "failed",
@@ -233,9 +257,9 @@ describe("cart CLI", () => {
     async (_field, patch) => {
       const root = mkdtempSync(join(tmpdir(), "wfm-cli-safety-"));
       const request = writeValidRequest(root);
+      const events: string[] = [];
       const exitCode = await runCli(["build", request], {
-        rootDir: root,
-        env: baseEnv(root),
+        ...lifecycleDependencies(root, events),
         invokeCodex: async ({ reportPath, requestSha256 }) => {
           writeReport(reportPath, requestSha256, patch);
           return { exitCode: 0, signal: null, timedOut: false };
@@ -248,9 +272,9 @@ describe("cart CLI", () => {
   it("returns nonzero on request hash mismatch", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-hash-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath }) => {
         writeReport(reportPath, "b".repeat(64));
         return { exitCode: 0, signal: null, timedOut: false };
@@ -262,10 +286,10 @@ describe("cart CLI", () => {
   it("chmods report.json to 0600 after a successful run", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-perm-ok-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     let reportPath = "";
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath: path, requestSha256 }) => {
         reportPath = path;
         writeReport(path, requestSha256, {}, 0o644);
@@ -280,10 +304,10 @@ describe("cart CLI", () => {
   it("chmods report.json to 0600 after a nonzero report outcome", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-perm-fail-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     let reportPath = "";
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath: path, requestSha256 }) => {
         reportPath = path;
         writeReport(path, requestSha256, { checkoutVisited: true }, 0o644);
@@ -297,9 +321,9 @@ describe("cart CLI", () => {
   it("still releases the lock if report chmod fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-perm-lock-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       secureReport: () => {
         throw new Error("chmod failed");
       },
@@ -312,8 +336,7 @@ describe("cart CLI", () => {
     // Lock released: second run can acquire again.
     expect(
       await runCli(["build", request], {
-        rootDir: root,
-        env: baseEnv(root),
+        ...lifecycleDependencies(root, events),
         invokeCodex: async ({ reportPath, requestSha256 }) => {
           writeReport(reportPath, requestSha256);
           return { exitCode: 0, signal: null, timedOut: false };
@@ -325,10 +348,10 @@ describe("cart CLI", () => {
   it("chmods report.json when invoke rejects after writing a report", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-perm-reject-"));
     const request = writeValidRequest(root);
+    const events: string[] = [];
     let reportPath = "";
     const exitCode = await runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath: path, requestSha256 }) => {
         reportPath = path;
         writeReport(path, requestSha256, {}, 0o644);
@@ -341,8 +364,7 @@ describe("cart CLI", () => {
     // Lock released for a subsequent run.
     expect(
       await runCli(["build", request], {
-        rootDir: root,
-        env: baseEnv(root),
+        ...lifecycleDependencies(root, events),
         invokeCodex: async ({ reportPath: path, requestSha256 }) => {
           writeReport(path, requestSha256);
           return { exitCode: 0, signal: null, timedOut: false };
@@ -355,6 +377,7 @@ describe("cart CLI", () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-abort-"));
     const request = writeValidRequest(root);
     const lockPath = join(root, ".wfm-cart.lock");
+    const events: string[] = [];
     let sawSignal: AbortSignal | undefined;
     let resolveStarted!: () => void;
     const invokeStarted = new Promise<void>((resolve) => {
@@ -388,8 +411,7 @@ describe("cart CLI", () => {
 
     const controller = new AbortController();
     const runPromise = runCli(["build", request], {
-      rootDir: root,
-      env: baseEnv(root),
+      ...lifecycleDependencies(root, events),
       signal: controller.signal,
       invokeCodex: invoke,
     });
@@ -401,6 +423,7 @@ describe("cart CLI", () => {
     expect(exitCode).toBe(1);
     expect(sawSignal?.aborted).toBe(true);
     expect(existsSync(lockPath)).toBe(false);
+    expect(events).toContain("chrome-stop");
   });
 
   it("installs and removes process signal handlers only via entrypoint helper", async () => {
@@ -438,5 +461,165 @@ describe("cart CLI", () => {
       "off:SIGINT",
       "off:SIGTERM",
     ]);
+  });
+
+  it("stops Chrome before releasing the lock on build success", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-life-"));
+    const request = writeValidRequest(root);
+    const events: string[] = [];
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      invokeCodex: async ({ reportPath, requestSha256 }) => {
+        events.push("codex");
+        writeReport(reportPath, requestSha256);
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+      releaseLock: (lock) => {
+        events.push("lock-release");
+        lock.release();
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(events).toEqual([
+      "token-check",
+      "chrome-start",
+      "codex",
+      "chrome-stop",
+      "lock-release",
+    ]);
+  });
+
+  it.each(["throw", "nonzero", "malformed", "chmod"] as const)(
+    "closes owned Chrome after %s failure",
+    async (failure) => {
+      const root = mkdtempSync(join(tmpdir(), "wfm-cli-cleanup-"));
+      const request = writeValidRequest(root);
+      const events: string[] = [];
+      const secureDependency =
+        failure === "chmod"
+          ? {
+              secureReport: () => {
+                throw new Error("chmod failed");
+              },
+            }
+          : {};
+      const exitCode = await runCli(["build", request], {
+        ...lifecycleDependencies(root, events),
+        ...secureDependency,
+        invokeCodex: async ({ reportPath, requestSha256 }) => {
+          events.push("codex");
+          if (failure === "throw") throw new Error("synthetic");
+          if (failure === "malformed") writeFileSync(reportPath, "{");
+          else writeReport(reportPath, requestSha256);
+          return {
+            exitCode: failure === "nonzero" ? 1 : 0,
+            signal: null,
+            timedOut: false,
+          };
+        },
+      });
+      expect(exitCode).not.toBe(0);
+      expect(events.at(-1)).toBe("chrome-stop");
+    },
+  );
+
+  it("retains the lock when Chrome cannot be confirmed stopped", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-stuck-"));
+    const request = writeValidRequest(root);
+    const lockPath = join(root, ".wfm-cart.lock");
+    const events: string[] = [];
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events, {
+        stopped: false,
+        remainingProfilePids: [4242],
+      }),
+      invokeCodex: async ({ reportPath, requestSha256 }) => {
+        writeReport(reportPath, requestSha256);
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
+  });
+
+  it("runs auth-check with no grocery request or cart instructions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-auth-check-"));
+    const events: string[] = [];
+    let prompt = "";
+    const exitCode = await runCli(["auth-check"], {
+      ...lifecycleDependencies(root, events),
+      invokeCodex: async ({ reportPath, prompt: value }) => {
+        prompt = value;
+        writeFileSync(
+          reportPath,
+          readFileSync(
+            new URL("fixtures/valid-auth-report.json", import.meta.url),
+            "utf8",
+          ),
+          { mode: 0o600 },
+        );
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(prompt).toContain("NEVER inspect cart contents");
+    expect(prompt).not.toContain("GROCERY REQUEST");
+    expect(events).toContain("chrome-stop");
+  });
+
+  it("returns 1 when auth-check reports signed out", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-auth-fail-"));
+    const events: string[] = [];
+    const exitCode = await runCli(["auth-check"], {
+      ...lifecycleDependencies(root, events),
+      invokeCodex: async ({ reportPath }) => {
+        const report = JSON.parse(
+          readFileSync(
+            new URL("fixtures/valid-auth-report.json", import.meta.url),
+            "utf8",
+          ),
+        );
+        Object.assign(report, {
+          runStatus: "failed",
+          authenticated: false,
+          failureReason: "Amazon is signed out",
+        });
+        writeFileSync(reportPath, JSON.stringify(report), { mode: 0o600 });
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(1);
+    expect(events).toContain("chrome-stop");
+  });
+
+  it("owns the harmless Example Domain attachment lifecycle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-attachment-check-"));
+    const events: string[] = [];
+    let launchUrl = "";
+    const dependencies = lifecycleDependencies(root, events);
+    const exitCode = await runCli(["attachment-check"], {
+      ...dependencies,
+      launchBrowser: async (input) => {
+        launchUrl = input.launchUrl ?? "";
+        return dependencies.launchBrowser();
+      },
+      invokeCodex: async ({ reportPath, prompt }) => {
+        expect(prompt).toContain("https://example.com");
+        expect(prompt).not.toContain("Amazon");
+        writeFileSync(
+          reportPath,
+          readFileSync(
+            new URL("fixtures/valid-attachment-report.json", import.meta.url),
+            "utf8",
+          ),
+          { mode: 0o600 },
+        );
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(launchUrl).toBe("https://example.com");
+    expect(events).toContain("chrome-stop");
   });
 });

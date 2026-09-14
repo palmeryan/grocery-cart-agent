@@ -1,6 +1,11 @@
 import { closeSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 
-export function acquireRunLock(path: string): () => void {
+export interface RunLock {
+  release(): void;
+  retain(): void;
+}
+
+export function acquireRunLock(path: string): RunLock {
   let descriptor: number;
   try {
     descriptor = openSync(path, "wx", 0o600);
@@ -10,8 +15,19 @@ export function acquireRunLock(path: string): () => void {
     );
   }
   writeFileSync(descriptor, `${process.pid}\n`);
-  return () => {
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
     closeSync(descriptor);
-    unlinkSync(path);
+    closed = true;
+  };
+  return {
+    release() {
+      close();
+      unlinkSync(path);
+    },
+    retain() {
+      close();
+    },
   };
 }

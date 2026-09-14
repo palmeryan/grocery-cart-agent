@@ -52,6 +52,7 @@ export interface CartReport {
 }
 
 export interface RunPaths {
+  kind: "build" | "auth-check" | "attachment-check";
   runId: string;
   runDir: string;
   requestPath: string;

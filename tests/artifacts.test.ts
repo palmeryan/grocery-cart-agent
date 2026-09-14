@@ -19,7 +19,20 @@ describe("artifact paths", () => {
   it("creates one timestamped run outside tracked source paths", () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cart-"));
     const paths = createRunPaths(root, new Date("2026-09-12T12:34:56Z"));
+    expect(paths.kind).toBe("build");
     expect(paths.runId).toBe("2026-09-12T12-34-56-000Z");
+    expect(paths.reportPath).toContain("/runs/");
+    expect(paths.browserOutputDir).toContain("/browser");
+  });
+
+  it("creates an auth-check run without requiring a request path", () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-auth-"));
+    const paths = createRunPaths(
+      root,
+      new Date("2026-09-12T12:34:56Z"),
+      "auth-check",
+    );
+    expect(paths.kind).toBe("auth-check");
     expect(paths.reportPath).toContain("/runs/");
     expect(paths.browserOutputDir).toContain("/browser");
   });

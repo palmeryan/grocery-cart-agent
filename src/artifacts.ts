@@ -30,12 +30,17 @@ const sortKeys = (value: unknown): unknown => {
 export const canonicalRequest = (value: unknown): string =>
   `${JSON.stringify(sortKeys(value), null, 2)}\n`;
 
-export function createRunPaths(rootDir: string, now = new Date()): RunPaths {
+export function createRunPaths(
+  rootDir: string,
+  now = new Date(),
+  kind: RunPaths["kind"] = "build",
+): RunPaths {
   const runId = now.toISOString().replaceAll(":", "-").replace(".", "-");
   const runDir = join(rootDir, "runs", runId);
   const browserOutputDir = join(runDir, "browser");
   mkdirSync(browserOutputDir, { recursive: true, mode: 0o700 });
   return {
+    kind,
     runId,
     runDir,
     requestPath: join(runDir, "request.json"),

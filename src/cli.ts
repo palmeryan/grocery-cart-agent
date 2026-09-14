@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -10,17 +10,35 @@ import {
   writeRequestSnapshot,
   writeRunMetadata,
 } from "./artifacts.js";
+import {
+  BrowserLaunchError,
+  launchOwnedChrome,
+  type LaunchChromeInput,
+} from "./browser.js";
 import { buildCodexInvocation, runCodex } from "./codex.js";
 import { loadConfig } from "./config.js";
-import { acquireRunLock } from "./lock.js";
-import { renderPrompt } from "./prompt.js";
 import {
+  assertExtensionTokenAvailable,
+  type KeychainCheckInput,
+} from "./keychain.js";
+import { acquireRunLock, type RunLock } from "./lock.js";
+import {
+  renderAttachmentPrompt,
+  renderAuthPrompt,
+  renderPrompt,
+} from "./prompt.js";
+import {
+  assertAttachmentReportSafe,
+  assertAuthReportSafe,
   assertReportMatchesRequest,
   assertReportPreflight,
   loadRequest,
+  parseAttachmentReport,
+  parseAuthReport,
   parseReport,
 } from "./validation.js";
 import type { CodexResult } from "./codex.js";
+import type { OwnedChromeSession, RunPaths } from "./types.js";
 
 interface InvokeInput {
   reportPath: string;
@@ -33,12 +51,17 @@ type InvokeCodex = (
   signal?: AbortSignal,
 ) => Promise<CodexResult>;
 
+type CommandKind = RunPaths["kind"];
+
 interface CliDependencies {
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
   invokeCodex?: InvokeCodex;
   signal?: AbortSignal;
   secureReport?: (path: string) => void;
+  checkExtensionToken?: (input: KeychainCheckInput) => void;
+  launchBrowser?: (input: LaunchChromeInput) => Promise<OwnedChromeSession>;
+  releaseLock?: (lock: RunLock) => void;
 }
 
 export interface SignalHandlerOptions {
@@ -46,6 +69,13 @@ export interface SignalHandlerOptions {
   signals?: NodeJS.Signals[];
   controller?: AbortController;
 }
+
+const USAGE = `usage: cart build <request.json>
+       cart auth-check
+       cart attachment-check`;
+
+const WHOLE_FOODS_URL = "https://www.amazon.com/wholefoods";
+const EXAMPLE_URL = "https://example.com";
 
 /**
  * Install SIGINT/SIGTERM handlers only for the real CLI entrypoint lifetime.
@@ -75,114 +105,274 @@ export async function withCliSignalHandlers<T>(
   }
 }
 
+const parseCommand = (
+  argv: string[],
+): { command: CommandKind; requestPath?: string } | null => {
+  if (argv[0] === "build" && argv.length === 2 && argv[1]) {
+    return { command: "build", requestPath: argv[1] };
+  }
+  if (argv[0] === "auth-check" && argv.length === 1) {
+    return { command: "auth-check" };
+  }
+  if (argv[0] === "attachment-check" && argv.length === 1) {
+    return { command: "attachment-check" };
+  }
+  return null;
+};
+
+const assertExecutable = (path: string, label: string): void => {
+  try {
+    accessSync(path, constants.X_OK);
+  } catch {
+    throw new Error(`${label} is missing or not executable: ${path}`);
+  }
+};
+
+const schemaPathFor = (rootDir: string, command: CommandKind): string => {
+  if (command === "build") return join(rootDir, "schemas", "report.schema.json");
+  if (command === "auth-check") {
+    return join(rootDir, "schemas", "auth-report.schema.json");
+  }
+  return join(rootDir, "schemas", "attachment-report.schema.json");
+};
+
 export async function runCli(
   argv: string[],
   dependencies: CliDependencies = {},
 ): Promise<number> {
-  if (argv.length !== 2 || argv[0] !== "build") {
-    console.error("Usage: npm run cart -- build <grocery-list.json>");
+  const parsed = parseCommand(argv);
+  if (!parsed) {
+    console.error(USAGE);
     return 2;
   }
 
   const rootDir = resolve(dependencies.rootDir ?? process.cwd());
-  const requestSource = resolve(argv[1]!);
   const secure =
     dependencies.secureReport ?? ((path: string) => secureReport(path));
+  const checkExtensionToken =
+    dependencies.checkExtensionToken ?? assertExtensionTokenAvailable;
+  const launchBrowser = dependencies.launchBrowser ?? launchOwnedChrome;
+  const releaseLock =
+    dependencies.releaseLock ?? ((lock: RunLock) => lock.release());
+
+  let lock: RunLock | undefined;
+  let browser: OwnedChromeSession | undefined;
+  let paths: RunPaths | undefined;
+  let exitCode = 2;
+  let lockAcquired = false;
+  let retainLock = false;
+  let cleanupFailed = false;
+  let invocationAttempted = false;
+  const lockPath = join(rootDir, ".wfm-cart.lock");
+
   try {
-    const request = loadRequest(requestSource);
-    const requestSha256 = sha256(canonicalRequest(request));
     const config = loadConfig(dependencies.env ?? process.env, rootDir);
-    if (!existsSync(config.playwrightMcpBin)) {
-      throw new Error("Playwright MCP is not installed; run npm install");
+    assertExecutable(config.chromeExecutable, "Chrome executable");
+    assertExecutable(config.playwrightMcpBin, "Playwright MCP");
+    assertExecutable(config.playwrightMcpShim, "Playwright MCP shim");
+
+    checkExtensionToken({
+      account: config.keychainAccount,
+      service: config.keychainService,
+    });
+
+    const requestSource =
+      parsed.command === "build" ? resolve(parsed.requestPath!) : undefined;
+    const request =
+      parsed.command === "build" ? loadRequest(requestSource!) : undefined;
+    const requestSha256 =
+      parsed.command === "build"
+        ? sha256(canonicalRequest(request!))
+        : sha256(parsed.command);
+
+    lock = acquireRunLock(lockPath);
+    lockAcquired = true;
+
+    paths = createRunPaths(rootDir, new Date(), parsed.command);
+    if (parsed.command === "build") {
+      writeRequestSnapshot(requestSource!, paths.requestPath);
+      writeRunMetadata(paths, requestSource!, requestSha256);
     }
 
-    const release = acquireRunLock(join(rootDir, ".wfm-cart.lock"));
     try {
-      const paths = createRunPaths(rootDir);
-      writeRequestSnapshot(requestSource, paths.requestPath);
-      writeRunMetadata(paths, requestSource, requestSha256);
-      const previousReport = findPreviousReport(
-        config.runsDir,
-        requestSha256,
-      );
-      const prompt = renderPrompt({
-        request,
+      browser = await launchBrowser({
+        executable: config.chromeExecutable,
+        profileDir: config.profileDir,
+        startupTimeoutMs: config.chromeStartupTimeoutMs,
+        stopTimeoutMs: config.chromeStopTimeoutMs,
+        launchUrl:
+          parsed.command === "attachment-check"
+            ? EXAMPLE_URL
+            : WHOLE_FOODS_URL,
+      });
+    } catch (error) {
+      if (error instanceof BrowserLaunchError) {
+        retainLock = error.requiresLockRetention;
+      } else {
+        // Unknown launch failures retain conservatively.
+        retainLock = true;
+      }
+      console.error(error instanceof Error ? error.message : String(error));
+      exitCode = 2;
+      // Fall through to cleanup finally; do not run Codex.
+      return await finish();
+    }
+
+    let prompt: string;
+    if (parsed.command === "build") {
+      const previousReport = findPreviousReport(config.runsDir, requestSha256);
+      prompt = renderPrompt({
+        request: request!,
         requestSha256,
         expectedPostalCode: config.expectedPostalCode,
         previousReport,
         browserOutputDir: paths.browserOutputDir,
       });
-      const signal = dependencies.signal;
-      if (signal?.aborted) {
-        console.error("Cart run aborted before Codex started");
-        return 1;
-      }
-      const invoke: InvokeCodex =
-        dependencies.invokeCodex ??
-        (async (_input, runSignal) => {
-          const invocation = buildCodexInvocation({
-            rootDir,
-            browserOutputDir: paths.browserOutputDir,
-            reportPath: paths.reportPath,
-            schemaPath: join(rootDir, "schemas", "report.schema.json"),
-            playwrightMcpBin: config.playwrightMcpBin,
-            playwrightMcpShim: config.playwrightMcpShim,
-          });
-          return runCodex({
-            executable: config.codexBin,
-            args: invocation.args,
-            prompt,
-            eventsPath: paths.eventsPath,
-            stderrPath: paths.stderrPath,
-            timeoutMs: config.maxRunMs,
-            ...(runSignal ? { signal: runSignal } : {}),
-          });
+    } else if (parsed.command === "auth-check") {
+      prompt = renderAuthPrompt({
+        expectedPostalCode: config.expectedPostalCode,
+        browserOutputDir: paths.browserOutputDir,
+      });
+    } else {
+      prompt = renderAttachmentPrompt();
+    }
+
+    const signal = dependencies.signal;
+    if (signal?.aborted) {
+      console.error(
+        parsed.command === "build"
+          ? "Cart run aborted before Codex started"
+          : `${parsed.command} aborted before Codex started`,
+      );
+      exitCode = 1;
+      return await finish();
+    }
+
+    const invoke: InvokeCodex =
+      dependencies.invokeCodex ??
+      (async (_input, runSignal) => {
+        const invocation = buildCodexInvocation({
+          rootDir,
+          browserOutputDir: paths!.browserOutputDir,
+          reportPath: paths!.reportPath,
+          schemaPath: schemaPathFor(rootDir, parsed.command),
+          playwrightMcpBin: config.playwrightMcpBin,
+          playwrightMcpShim: config.playwrightMcpShim,
         });
-      // Nested finally: if invocation was attempted (including reject after a
-      // written report), always tighten report permissions. Outer finally still
-      // releases the lock even when chmod throws.
-      let invocationAttempted = false;
-      try {
-        invocationAttempted = true;
-        const result = await invoke(
-          {
-            reportPath: paths.reportPath,
-            requestSha256,
-            prompt,
-          },
-          signal,
+        return runCodex({
+          executable: config.codexBin,
+          args: invocation.args,
+          prompt,
+          eventsPath: paths!.eventsPath,
+          stderrPath: paths!.stderrPath,
+          timeoutMs: config.maxRunMs,
+          ...(runSignal ? { signal: runSignal } : {}),
+        });
+      });
+
+    try {
+      invocationAttempted = true;
+      const result = await invoke(
+        {
+          reportPath: paths.reportPath,
+          requestSha256,
+          prompt,
+        },
+        signal,
+      );
+
+      if (signal?.aborted) {
+        console.error(
+          parsed.command === "build"
+            ? `Cart run aborted; inspect ${paths.runDir}`
+            : `${parsed.command} aborted; inspect ${paths.runDir}`,
         );
-        if (signal?.aborted) {
-          console.error(`Cart run aborted; inspect ${paths.runDir}`);
-          return 1;
-        }
-        if (result.timedOut || result.exitCode !== 0) {
-          console.error(`Codex failed; inspect ${paths.runDir}`);
-          return 1;
-        }
+        exitCode = 1;
+      } else if (result.timedOut || result.exitCode !== 0) {
+        console.error(`Codex failed; inspect ${paths.runDir}`);
+        exitCode = 1;
+      } else if (parsed.command === "build") {
         const report = parseReport(readFileSync(paths.reportPath, "utf8"));
-        assertReportMatchesRequest(report, request);
+        assertReportMatchesRequest(report, request!);
         if (report.requestSha256 !== requestSha256) {
           throw new Error("Report requestSha256 does not match the request");
         }
         assertReportPreflight(report);
         if (report.checkoutVisited || report.settingsChanged) {
           console.error(`Safety condition violated; inspect ${paths.runDir}`);
-          return 1;
+          exitCode = 1;
+        } else {
+          console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
+          exitCode = report.runStatus === "failed" ? 1 : 0;
         }
-        console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
-        return report.runStatus === "failed" ? 1 : 0;
-      } finally {
-        if (invocationAttempted) {
-          secure(paths.reportPath);
+      } else if (parsed.command === "auth-check") {
+        const report = parseAuthReport(readFileSync(paths.reportPath, "utf8"));
+        try {
+          assertAuthReportSafe(report);
+          console.log(`Auth check ${report.runStatus}: ${paths.reportPath}`);
+          exitCode = report.runStatus === "failed" ? 1 : 0;
+        } catch (error) {
+          // Auth gate/safety failures are soft failures (exit 1), not
+          // orchestration/schema failures (exit 2).
+          console.error(
+            error instanceof Error ? error.message : "Auth check failed",
+          );
+          exitCode = 1;
         }
+      } else {
+        const report = parseAttachmentReport(
+          readFileSync(paths.reportPath, "utf8"),
+        );
+        assertAttachmentReportSafe(report);
+        console.log(`Attachment check connected: ${paths.reportPath}`);
+        exitCode = 0;
       }
-    } finally {
-      release();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      exitCode = 2;
     }
+
+    return await finish();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    return 2;
+    exitCode = 2;
+    return await finish();
+  }
+
+  async function finish(): Promise<number> {
+    // Codex/invoke must have settled (or never started) before browser stop.
+    if (lockAcquired && lock) {
+      try {
+        if (invocationAttempted && paths) {
+          try {
+            secure(paths.reportPath);
+          } catch (error) {
+            cleanupFailed = true;
+            console.error(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+        if (browser) {
+          const stopped = await browser.stop();
+          if (!stopped.stopped) {
+            retainLock = true;
+            cleanupFailed = true;
+            console.error(
+              `Chrome still uses the dedicated profile (PIDs: ${stopped.remainingProfilePids.join(", ")}). Confirm those processes are gone, then manually remove ${lockPath}.`,
+            );
+          }
+        }
+      } finally {
+        if (!retainLock) {
+          releaseLock(lock);
+        } else {
+          lock.retain();
+        }
+      }
+      if (cleanupFailed) exitCode = 2;
+    }
+    return exitCode;
   }
 }
 
