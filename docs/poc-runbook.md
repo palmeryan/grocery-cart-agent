@@ -5,7 +5,7 @@ Manual evaluation procedure for the unattended cart builder. Do not commit
 
 ## Preconditions
 
-1. Confirm no browser uses `~/.whole-foods-cart/chrome-profile`.
+1. Confirm no browser uses the dedicated POC Chrome profile.
 2. Confirm `git status --short` does not show `runs/`.
 3. Review the normal Amazon cart and record unrelated baseline items.
 4. Watch the first three-item smoke run.
@@ -31,14 +31,49 @@ export WFM_EXPECTED_POSTAL_CODE=<five-digit-postal-code>
 Controlled rerun: leave the previous POC-added items in the cart and rerun one
 unchanged fixture.
 
+## Smoke results (Task 8)
+
+**POC outcome: failed / inconclusive for cart matching.** Authentication blocked
+the first gate, so product selection quality was never measured.
+
+| Attempt | Gate reached | Auth | Products added | Checkout | Settings changed | Notes |
+|---|---|---|---:|---|---|---|
+| Initial smoke | Blocked before navigation | N/A | 0 | No | No | MCP tool approval rejected under `default_tools_approval_mode="auto"` with `approval_policy="never"`. Fixed in `122b465` (`"approve"`, read-only sandbox kept, absolute final screenshot path). |
+| Disposable public-page probe | Navigation + screenshot OK | N/A | 0 | No | No | Confirmed MCP navigate and absolute screenshot placement after the fix. |
+| Supervised smoke #1 | Whole Foods storefront + expected location | Unauthenticated | 0 | No | No | Session not signed in. |
+| Manual auth recovery | N/A (manual) | Signed-in header verified | 0 | No | No | User signed in on the dedicated profile and quit Chrome cleanly. Single allowed recovery. |
+| Supervised smoke #2 | Whole Foods storefront + expected location | Unauthenticated | 0 | No | No | Auth still did not persist into Playwright MCP after recovery. |
+
+Safety observed across all attempts:
+
+- No products added.
+- Checkout never visited.
+- Delivery/payment settings not changed.
+- No unrelated cart items changed.
+
+Because the three-item smoke gate failed after the single allowed manual auth
+recovery, the three 10-item fixtures, controlled idempotency rerun, and later-day
+persistence check were **not run**.
+
 ## Result table
 
 | Run | Unattended | Requested | Defensible matches | Wrong additions | Quantity errors | Duplicates | Checkout visited | Auth recovery |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Staples | | 10 | | | | | | |
-| Ambiguous | | 10 | | | | | | |
-| Substitutions | | 10 | | | | | | |
-| Controlled rerun | | 10 | | | | | | |
+|---|---|---:|---|---|---|---|---|---|
+| Smoke (3-item) | Failed at auth gate | 3 | Not run | 0 | N/A | N/A | No | Attempted once; auth did not persist into MCP |
+| Staples | Not run | 10 | Not run | N/A | N/A | N/A | N/A | N/A |
+| Ambiguous | Not run | 10 | Not run | N/A | N/A | N/A | N/A | N/A |
+| Substitutions | Not run | 10 | Not run | N/A | N/A | N/A | N/A | N/A |
+| Controlled rerun | Not run | 10 | Not run | N/A | N/A | N/A | N/A | N/A |
+| Later-day persistence | Not run | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+
+## Architecture decision
+
+**Authentication dominates: use an attached normal browser session.**
+
+A dedicated Chromium user-data-dir profile plus Playwright MCP did not retain a
+usable Amazon session across a clean manual sign-in and subsequent MCP launch.
+Further cart-matching work should attach to a normal interactive browser session
+rather than relying on this isolated profile for authentication.
 
 ## Pass rules
 
