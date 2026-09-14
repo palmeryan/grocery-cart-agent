@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { BrowserLaunchError } from "../src/browser.js";
 import { runCli, withCliSignalHandlers } from "../src/cli.js";
 import type { CodexResult } from "../src/codex.js";
 
@@ -539,6 +540,87 @@ describe("cart CLI", () => {
       },
     });
     expect(exitCode).toBe(2);
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
+  });
+
+  it("releases the lock when BrowserLaunchError does not require retention", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-launch-release-"));
+    const request = writeValidRequest(root);
+    const lockPath = join(root, ".wfm-cart.lock");
+    const events: string[] = [];
+    let codexCalled = false;
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      launchBrowser: async () => {
+        throw new BrowserLaunchError(
+          "Dedicated Chrome profile is already active: 99",
+          false,
+        );
+      },
+      invokeCodex: async () => {
+        codexCalled = true;
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(codexCalled).toBe(false);
+    expect(existsSync(lockPath)).toBe(false);
+    // Subsequent run can acquire the released lock.
+    expect(
+      await runCli(["build", request], {
+        ...lifecycleDependencies(root, events),
+        invokeCodex: async ({ reportPath, requestSha256 }) => {
+          writeReport(reportPath, requestSha256);
+          return { exitCode: 0, signal: null, timedOut: false };
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it("retains the lock when BrowserLaunchError requires retention", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-launch-retain-"));
+    const request = writeValidRequest(root);
+    const lockPath = join(root, ".wfm-cart.lock");
+    const events: string[] = [];
+    let codexCalled = false;
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      launchBrowser: async () => {
+        throw new BrowserLaunchError(
+          "Owned Chrome exited before the profile became idle",
+          true,
+        );
+      },
+      invokeCodex: async () => {
+        codexCalled = true;
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(codexCalled).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
+  });
+
+  it("retains the lock conservatively on unknown launch errors", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-launch-unknown-"));
+    const request = writeValidRequest(root);
+    const lockPath = join(root, ".wfm-cart.lock");
+    const events: string[] = [];
+    let codexCalled = false;
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      launchBrowser: async () => {
+        throw new Error("unexpected spawn failure");
+      },
+      invokeCodex: async () => {
+        codexCalled = true;
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(codexCalled).toBe(false);
     expect(existsSync(lockPath)).toBe(true);
     expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
   });
