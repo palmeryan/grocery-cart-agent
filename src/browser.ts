@@ -85,7 +85,15 @@ export function listProfileProcessIds(
   const marker = `--user-data-dir=${profileDir}`;
   return output
     .split("\n")
-    .filter((line) => line.includes(marker))
+    .filter((line) => {
+      const index = line.indexOf(marker);
+      if (index < 0) {
+        return false;
+      }
+      const after = line[index + marker.length];
+      // Exact token only: end of arg, or a new CLI flag/arg separator.
+      return after === undefined || after === " " || after === "\t";
+    })
     .map((line) => Number(/^\s*(\d+)/.exec(line)?.[1]))
     .filter((pid) => Number.isInteger(pid) && pid > 0);
 }

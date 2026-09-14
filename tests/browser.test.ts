@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  BrowserLaunchError,
   launchOwnedChrome,
   listProfileProcessIds,
 } from "../src/browser.js";
@@ -10,6 +11,11 @@ class FakeChild extends EventEmitter {
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
 }
+
+const advancingNow = () => {
+  let value = 0;
+  return () => ++value;
+};
 
 describe("profile process discovery", () => {
   it("returns only processes using the exact dedicated profile argument", () => {
@@ -22,33 +28,51 @@ describe("profile process discovery", () => {
       listProfileProcessIds("/profiles/wfm", () => stdout),
     ).toEqual([101, 103]);
   });
+
+  it("does not match prefix-sibling profile directories", () => {
+    const stdout = [
+      "201 /Applications/Google Chrome --user-data-dir=/profiles/wfm-extra",
+      "202 /Applications/Google Chrome --user-data-dir=/profiles/wfm",
+      "203 /Applications/Google Chrome --user-data-dir=/profiles/wfm2 --type=gpu",
+    ].join("\n");
+    expect(
+      listProfileProcessIds("/profiles/wfm", () => stdout),
+    ).toEqual([202]);
+  });
 });
 
 describe("owned Chrome lifecycle", () => {
   it("refuses a profile already used before launch", async () => {
-    await expect(
-      launchOwnedChrome({
-        executable: "/Applications/Google Chrome",
-        profileDir: "/profiles/wfm",
-        startupTimeoutMs: 100,
-        stopTimeoutMs: 100,
-        listProfilePids: () => [999],
-        spawnChrome: vi.fn(),
-      }),
-    ).rejects.toThrow("Dedicated Chrome profile is already active");
+    const spawnChrome = vi.fn();
+    const error = await launchOwnedChrome({
+      executable: "/Applications/Google Chrome",
+      profileDir: "/profiles/wfm",
+      startupTimeoutMs: 100,
+      stopTimeoutMs: 100,
+      listProfilePids: () => [999],
+      spawnChrome,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BrowserLaunchError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("Dedicated Chrome profile is already active"),
+      requiresLockRetention: false,
+    });
+    expect(spawnChrome).not.toHaveBeenCalled();
   });
 
   it("launches normal Chrome and stops its owned process group", async () => {
     const child = new FakeChild();
     const signals: Array<[number, NodeJS.Signals]> = [];
     let checks = 0;
+    const spawnChrome = vi.fn(() => child);
     const session = await launchOwnedChrome({
       executable: "/Applications/Google Chrome",
       profileDir: "/profiles/wfm",
       startupTimeoutMs: 100,
       stopTimeoutMs: 100,
       launchUrl: "https://www.amazon.com/wholefoods",
-      spawnChrome: vi.fn(() => child),
+      spawnChrome,
       listProfilePids: () => (++checks === 1 ? [] : checks < 4 ? [4242] : []),
       signalGroup: (pid, signal) => {
         signals.push([pid, signal]);
@@ -56,6 +80,16 @@ describe("owned Chrome lifecycle", () => {
       },
       sleep: async () => undefined,
     });
+    expect(spawnChrome).toHaveBeenCalledWith(
+      "/Applications/Google Chrome",
+      [
+        "--user-data-dir=/profiles/wfm",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "https://www.amazon.com/wholefoods",
+      ],
+      { detached: true, stdio: "ignore" },
+    );
     expect(session.pid).toBe(4242);
     await expect(session.stop()).resolves.toEqual({
       stopped: true,
@@ -88,10 +122,7 @@ describe("owned Chrome lifecycle", () => {
         signals.push(signal);
       },
       sleep: async () => undefined,
-      now: (() => {
-        let value = 0;
-        return () => ++value;
-      })(),
+      now: advancingNow(),
     });
     expect((await session.stop()).stopped).toBe(true);
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
@@ -113,15 +144,84 @@ describe("owned Chrome lifecycle", () => {
       listProfilePids: () => (launched ? [4242, 5151] : []),
       signalGroup: (pid) => signaledGroups.push(pid),
       sleep: async () => undefined,
-      now: (() => {
-        let value = 0;
-        return () => ++value;
-      })(),
+      now: advancingNow(),
     });
     expect(await session.stop()).toEqual({
       stopped: false,
       remainingProfilePids: [4242, 5151],
     });
     expect(signaledGroups.every((pid) => pid === 4242)).toBe(true);
+  });
+
+  it("clears profile on startup failure without lock retention", async () => {
+    const child = new FakeChild();
+    const signaledGroups: number[] = [];
+    let launched = false;
+    let stopping = false;
+
+    const error = await launchOwnedChrome({
+      executable: "/Applications/Google Chrome",
+      profileDir: "/profiles/wfm",
+      startupTimeoutMs: 1,
+      stopTimeoutMs: 1,
+      spawnChrome: () => {
+        launched = true;
+        return child;
+      },
+      // Never includes owned PID 4242 → startup fails; foreign 5151 appears until cleanup.
+      listProfilePids: () => {
+        if (!launched) return [];
+        if (stopping) return [];
+        return [5151];
+      },
+      signalGroup: (pid, signal) => {
+        stopping = true;
+        signaledGroups.push(pid);
+        void signal;
+      },
+      sleep: async () => undefined,
+      now: advancingNow(),
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BrowserLaunchError);
+    expect(error).toMatchObject({
+      message: "Owned Chrome failed to start",
+      requiresLockRetention: false,
+    });
+    expect(signaledGroups.length).toBeGreaterThan(0);
+    expect(signaledGroups.every((pid) => pid === 4242)).toBe(true);
+    expect(signaledGroups).not.toContain(5151);
+  });
+
+  it("retains lock on startup failure when profile processes remain", async () => {
+    const child = new FakeChild();
+    const signaledGroups: number[] = [];
+    let launched = false;
+
+    const error = await launchOwnedChrome({
+      executable: "/Applications/Google Chrome",
+      profileDir: "/profiles/wfm",
+      startupTimeoutMs: 1,
+      stopTimeoutMs: 1,
+      spawnChrome: () => {
+        launched = true;
+        return child;
+      },
+      // Owned PID never appears; foreign 5151 remains after cleanup signals.
+      listProfilePids: () => (launched ? [5151] : []),
+      signalGroup: (pid) => {
+        signaledGroups.push(pid);
+      },
+      sleep: async () => undefined,
+      now: advancingNow(),
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(BrowserLaunchError);
+    expect(error).toMatchObject({
+      requiresLockRetention: true,
+    });
+    expect((error as BrowserLaunchError).message).toContain("5151");
+    expect(signaledGroups.every((pid) => pid === 4242)).toBe(true);
+    expect(signaledGroups).not.toContain(5151);
   });
 });
