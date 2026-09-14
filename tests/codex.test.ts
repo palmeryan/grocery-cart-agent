@@ -27,11 +27,11 @@ describe("Codex invocation", () => {
   it("uses a read-only sandbox and never bypasses approvals", () => {
     const invocation = buildCodexInvocation({
       rootDir: "/repo",
-      profileDir: "/profile",
       browserOutputDir: "/repo/runs/id/browser",
       reportPath: "/repo/runs/id/report.json",
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
+      playwrightMcpShim: "/repo/scripts/playwright-extension-mcp.sh",
     });
     const joined = invocation.args.join(" ");
     expect(invocation.args).toContain("--sandbox");
@@ -48,19 +48,28 @@ describe("Codex invocation", () => {
     expect(joined).not.toContain("--approve-for-me");
     expect(joined).not.toContain("workspace-write");
     expect(joined).not.toContain("--skip-git-repo-check");
-    expect(joined).toContain("--user-data-dir");
-    expect(joined).toContain("--caps=devtools");
-    expect(joined).toContain("--output-dir=/repo/runs/id/browser");
+    expect(joined).toContain(
+      'mcp_servers.playwright.command="/repo/scripts/playwright-extension-mcp.sh"',
+    );
+    expect(joined).toContain(
+      'mcp_servers.playwright.args=["/repo/node_modules/.bin/playwright-mcp","/repo/runs/id/browser"]',
+    );
+    expect(joined).not.toContain("--browser=chrome");
+    expect(joined).not.toContain("--user-data-dir");
+    expect(joined).not.toContain("--cdp-endpoint");
+    expect(joined).not.toContain("--storage-state");
+    expect(joined).not.toContain("PLAYWRIGHT_MCP_EXTENSION_TOKEN");
+    expect(joined).not.toContain("--extension");
   });
 
   it("passes request content through stdin, never command arguments", () => {
     const invocation = buildCodexInvocation({
       rootDir: "/repo",
-      profileDir: "/profile",
       browserOutputDir: "/repo/runs/id/browser",
       reportPath: "/repo/runs/id/report.json",
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
+      playwrightMcpShim: "/repo/scripts/playwright-extension-mcp.sh",
     });
     expect(invocation.args.at(-1)).toBe("-");
   });

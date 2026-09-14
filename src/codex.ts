@@ -4,11 +4,11 @@ import { finished } from "node:stream/promises";
 
 export interface CodexInvocationInput {
   rootDir: string;
-  profileDir: string;
   browserOutputDir: string;
   reportPath: string;
   schemaPath: string;
   playwrightMcpBin: string;
+  playwrightMcpShim: string;
 }
 
 export interface CodexInvocation {
@@ -42,10 +42,8 @@ export function buildCodexInvocation(
   input: CodexInvocationInput,
 ): CodexInvocation {
   const mcpArgs = [
-    "--browser=chrome",
-    `--user-data-dir=${input.profileDir}`,
-    `--output-dir=${input.browserOutputDir}`,
-    "--caps=devtools",
+    input.playwrightMcpBin,
+    input.browserOutputDir,
   ];
   return {
     args: [
@@ -65,7 +63,7 @@ export function buildCodexInvocation(
       "-c",
       'approval_policy="never"',
       "-c",
-      `mcp_servers.playwright.command=${JSON.stringify(input.playwrightMcpBin)}`,
+      `mcp_servers.playwright.command=${JSON.stringify(input.playwrightMcpShim)}`,
       "-c",
       `mcp_servers.playwright.args=${JSON.stringify(mcpArgs)}`,
       "-c",

@@ -122,11 +122,11 @@ export async function runCli(
         (async (_input, runSignal) => {
           const invocation = buildCodexInvocation({
             rootDir,
-            profileDir: config.profileDir,
             browserOutputDir: paths.browserOutputDir,
             reportPath: paths.reportPath,
             schemaPath: join(rootDir, "schemas", "report.schema.json"),
             playwrightMcpBin: config.playwrightMcpBin,
+            playwrightMcpShim: config.playwrightMcpShim,
           });
           return runCodex({
             executable: config.codexBin,
