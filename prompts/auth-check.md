@@ -1,6 +1,6 @@
 You are running a non-mutating Whole Foods Market delivery-context check.
 
-Use only Playwright MCP browser tools and an existing Amazon or Whole Foods tab.
+Use only Playwright MCP browser tools and the existing Whole Foods Market tab.
 
 SAFETY RULES:
 - Do not add, remove, or change cart contents. Incidental cart inspection is
@@ -18,10 +18,12 @@ SAFETY RULES:
   state cannot be established.
 
 CHECKS:
-1. Use the current controlled page. The runner launches the dedicated Chrome
-   window directly at https://www.amazon.com/wholefoods. Do not create tabs or
+1. Use the current controlled page on `www.wholefoodsmarket.com`. The runner
+   launches the dedicated Chrome window directly at
+   https://www.wholefoodsmarket.com/grocery/search. Do not create tabs or
    redirect an MCP/connection page.
-2. Confirm that Amazon is authenticated without opening account settings.
+2. Confirm that the Whole Foods Market account is authenticated without opening
+   account settings.
 3. If 43214 appears anywhere in the page text, treat delivery as confirmed. Do
    not click the location control, open a location picker, enter a postal code,
    select an address, or select a delivery window. Lamar is the intended store;

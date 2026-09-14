@@ -17,7 +17,6 @@ const baseEnv = (root: string) => ({
   HOME: root,
   USER: "test",
   PLAYWRIGHT_MCP_BIN: "/usr/bin/true",
-  PLAYWRIGHT_MCP_SHIM: "/usr/bin/true",
   CHROME_EXECUTABLE: "/usr/bin/true",
 });
 
@@ -28,8 +27,9 @@ const lifecycleDependencies = (
 ) => ({
   rootDir: root,
   env: baseEnv(root),
-  checkExtensionToken: () => {
-    events.push("token-check");
+  reservePort: async () => {
+    events.push("reserve-port");
+    return 45678;
   },
   launchBrowser: async () => {
     events.push("chrome-start");
@@ -101,6 +101,7 @@ describe("cart CLI", () => {
       /BROWSER OUTPUT DIRECTORY: .*\/runs\/[^/\s]+\/browser/,
     );
     expect(capturedPrompt).toMatch(/\/runs\/[^/\s]+\/browser\/final-state\.png/);
+    expect(events).toContain("reserve-port");
   });
 
   it("fails before Codex when request validation fails", async () => {
@@ -490,7 +491,7 @@ describe("cart CLI", () => {
     });
     expect(exitCode).toBe(0);
     expect(events).toEqual([
-      "token-check",
+      "reserve-port",
       "chrome-start",
       "codex",
       "chrome-stop",
@@ -587,7 +588,7 @@ describe("cart CLI", () => {
     expect(stopCalls).toBe(1);
     expect(releaseCalls).toBe(0);
     expect(events).toEqual([
-      "token-check",
+      "reserve-port",
       "chrome-start",
       "codex",
       "chrome-stop",
@@ -677,28 +678,28 @@ describe("cart CLI", () => {
     expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
   });
 
-  it("runs auth-check with no grocery request or cart instructions", async () => {
+  it("runs auth-check deterministically without Codex", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-auth-check-"));
     const events: string[] = [];
-    let prompt = "";
+    let codexCalled = false;
     const exitCode = await runCli(["auth-check"], {
       ...lifecycleDependencies(root, events),
-      invokeCodex: async ({ reportPath, prompt: value }) => {
-        prompt = value;
-        writeFileSync(
-          reportPath,
+      invokeCodex: async () => {
+        codexCalled = true;
+        throw new Error("auth-check must not invoke Codex");
+      },
+      runDeterministicCheck: async () => {
+        return JSON.parse(
           readFileSync(
             new URL("fixtures/valid-auth-report.json", import.meta.url),
             "utf8",
           ),
-          { mode: 0o600 },
         );
-        return { exitCode: 0, signal: null, timedOut: false };
       },
     });
     expect(exitCode).toBe(0);
-    expect(prompt).toContain("DELIVERY MODE: delivery");
-    expect(prompt).not.toContain("GROCERY REQUEST");
+    expect(codexCalled).toBe(false);
+    expect(events).toContain("reserve-port");
     expect(events).toContain("chrome-stop");
   });
 
@@ -707,7 +708,7 @@ describe("cart CLI", () => {
     const events: string[] = [];
     const exitCode = await runCli(["auth-check"], {
       ...lifecycleDependencies(root, events),
-      invokeCodex: async ({ reportPath }) => {
+      runDeterministicCheck: async () => {
         const report = JSON.parse(
           readFileSync(
             new URL("fixtures/valid-auth-report.json", import.meta.url),
@@ -717,10 +718,9 @@ describe("cart CLI", () => {
         Object.assign(report, {
           runStatus: "failed",
           authenticated: false,
-          failureReason: "Amazon is signed out",
+          failureReason: "Whole Foods Market is signed out",
         });
-        writeFileSync(reportPath, JSON.stringify(report), { mode: 0o600 });
-        return { exitCode: 0, signal: null, timedOut: false };
+        return report;
       },
     });
     expect(exitCode).toBe(1);
@@ -738,18 +738,13 @@ describe("cart CLI", () => {
         launchUrl = input.launchUrl ?? "";
         return dependencies.launchBrowser();
       },
-      invokeCodex: async ({ reportPath, prompt }) => {
-        expect(prompt).toContain("https://example.com");
-        expect(prompt).not.toContain("Amazon");
-        writeFileSync(
-          reportPath,
+      runDeterministicCheck: async () => {
+        return JSON.parse(
           readFileSync(
             new URL("fixtures/valid-attachment-report.json", import.meta.url),
             "utf8",
           ),
-          { mode: 0o600 },
         );
-        return { exitCode: 0, signal: null, timedOut: false };
       },
     });
     expect(exitCode).toBe(0);
@@ -762,20 +757,15 @@ describe("cart CLI", () => {
     const events: string[] = [];
     const exitCode = await runCli(["attachment-check"], {
       ...lifecycleDependencies(root, events),
-      invokeCodex: async ({ reportPath }) => {
-        writeFileSync(
-          reportPath,
-          JSON.stringify({
+      runDeterministicCheck: async () => {
+        return {
             connected: false,
             url: null,
             title: null,
             navigationPerformed: false,
             interactionPerformed: false,
-            failureReason: "Playwright Extension was not found",
-          }),
-          { mode: 0o600 },
-        );
-        return { exitCode: 0, signal: null, timedOut: false };
+            failureReason: "Deterministic Chrome/CDP check failed",
+          };
       },
     });
     expect(exitCode).toBe(1);

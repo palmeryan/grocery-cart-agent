@@ -1,21 +1,28 @@
-# Whole Foods Cart Builder POC
+# Whole Foods Cart Builder
 
-Local feasibility harness using the Codex CLI and Microsoft Playwright MCP to
+Local cart runner using the Codex CLI and Microsoft Playwright MCP to
 turn recipe JSON into a Whole Foods delivery cart. This repository records
 earlier incomplete dedicated-profile results and the current attached-browser
 workflow. The first successful end-to-end cart run is still outstanding.
 
 ## Current outcome
 
-The earlier dedicated-profile live smoke failed because Amazon authentication
-did not persist into Playwright MCP after a clean manual sign-in. Cart-matching
-acceptance runs (staples / ambiguous / substitutions, controlled rerun,
-later-day persistence) were not performed.
+The earlier dedicated-profile live smoke did not complete the cart workflow.
+Cart-matching acceptance runs (staples / ambiguous / substitutions, controlled
+rerun, later-day persistence) remain to be performed.
 
-The CLI owns a dedicated Chrome profile and attaches through the official
-Playwright MCP Browser Extension. The account's saved default address is the
-delivery context; Lamar is the intended Whole Foods store. Treat the commands
-below as the harness entrypoint until a live end-to-end run succeeds.
+The CLI owns a dedicated Chrome profile. Both its diagnostics and the
+cart-building agent connect directly to that owned Chrome instance over
+localhost CDP. The account's saved default address is the delivery context;
+Lamar is the intended Whole Foods store. Treat the commands below as the cart
+entrypoint until a live end-to-end run succeeds.
+
+The build has a deterministic shell and one adaptive browser-agent middle. The
+shell validates the request, owns the Chrome lifecycle and run lock, configures
+Playwright MCP, and validates the final report. A single browser-enabled Codex
+run performs the storefront work: it interprets recipe context, searches,
+chooses products or sensible substitutions, adds items, and verifies the cart.
+There is no separate deterministic candidate-search or product-selection pass.
 
 ## Operating limits
 
@@ -47,31 +54,28 @@ npm run typecheck
 npm run lint
 ```
 
-## Attached browser authentication
+## Browser authentication
 
 The cart command launches and owns a dedicated normal Chrome instance at
 `~/.whole-foods-cart/chrome-profile`. It never attaches to the everyday Chrome
 profile.
 
 1. Run `npm run login`.
-2. In that dedicated Chrome profile, install Microsoft's official Playwright
-   MCP Browser Extension.
-3. Sign in to Amazon and confirm the account's saved default address is the
-   intended Whole Foods delivery address, with Lamar as the store context.
-4. Copy the extension token, then run `npm run setup-extension-token`. Paste
-   the token only into the hidden macOS Keychain prompt.
-5. Close the dedicated Chrome window.
-6. Run `npm run cart -- attachment-check` to verify the extension against
-   Example Domain without opening Amazon.
-7. Run `npm run auth-check`.
-8. After the auth check succeeds, run
+2. Sign in to Whole Foods Market and confirm the account's saved default
+   address is the intended delivery address, with Lamar as the store context.
+3. Close the dedicated Chrome window.
+4. Run `npm run cart -- attachment-check` to verify deterministic Chrome/CDP
+   startup against Example Domain without opening the storefront.
+5. Run `npm run auth-check` to verify authentication and delivery context
+   deterministically, without invoking Codex.
+6. After the auth check succeeds, run
    `npm run cart -- build path/to/request.json`.
 
 The CLI starts Chrome on demand and closes only the instance it launched.
-The extension token is retrieved by the local shim from Keychain and is not
-passed in the recipe prompt or command arguments. Browser-tool connection
-details can still appear in tool output and saved run artifacts; treat those
-outputs as sensitive and do not commit or upload them.
+The build passes the owned Chrome's localhost CDP endpoint to Playwright MCP;
+it does not open an MCP connection tab or require a second browser window.
+Browser-tool connection details can still appear in tool output and saved run
+artifacts; treat those outputs as sensitive and do not commit or upload them.
 
 ### Recovery lock
 

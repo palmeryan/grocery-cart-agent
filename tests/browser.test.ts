@@ -71,7 +71,7 @@ describe("owned Chrome lifecycle", () => {
       profileDir: "/profiles/wfm",
       startupTimeoutMs: 100,
       stopTimeoutMs: 100,
-      launchUrl: "https://www.amazon.com/wholefoods",
+      launchUrl: "https://www.wholefoodsmarket.com/grocery/search",
       spawnChrome,
       listProfilePids: () => (++checks === 1 ? [] : checks < 4 ? [4242] : []),
       signalGroup: (pid, signal) => {
@@ -86,7 +86,7 @@ describe("owned Chrome lifecycle", () => {
         "--user-data-dir=/profiles/wfm",
         "--no-first-run",
         "--no-default-browser-check",
-        "https://www.amazon.com/wholefoods",
+        "https://www.wholefoodsmarket.com/grocery/search",
       ],
       { detached: true, stdio: "ignore" },
     );
@@ -96,6 +96,45 @@ describe("owned Chrome lifecycle", () => {
       remainingProfilePids: [],
     });
     expect(signals).toEqual([[4242, "SIGTERM"]]);
+  });
+
+  it("passes the requested remote debugging port to Chrome", async () => {
+    const child = new FakeChild();
+    let checks = 0;
+    let stopped = false;
+    const spawnChrome = vi.fn(() => child);
+    const session = await launchOwnedChrome({
+      executable: "/Applications/Google Chrome",
+      profileDir: "/profiles/wfm",
+      startupTimeoutMs: 100,
+      stopTimeoutMs: 100,
+      remoteDebuggingPort: 9222,
+      spawnChrome,
+      listProfilePids: () => {
+        if (stopped) return [];
+        return ++checks === 1 ? [] : [4242];
+      },
+      signalGroup: (_pid, signal) => {
+        if (signal === "SIGTERM") {
+          stopped = true;
+          child.emit("exit", 0, "SIGTERM");
+        }
+      },
+      sleep: async () => undefined,
+    });
+    expect(spawnChrome).toHaveBeenCalledWith(
+      "/Applications/Google Chrome",
+      [
+        "--user-data-dir=/profiles/wfm",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--remote-debugging-port=9222",
+        "https://www.wholefoodsmarket.com/grocery/search",
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    expect(session.remoteDebuggingPort).toBe(9222);
+    await expect(session.stop()).resolves.toMatchObject({ stopped: true });
   });
 
   it("escalates owned Chrome after the graceful timeout", async () => {

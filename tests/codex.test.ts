@@ -33,8 +33,7 @@ describe("Codex invocation", () => {
       reportPath: "/repo/runs/id/report.json",
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
-      playwrightMcpShim: "/repo/scripts/playwright-extension-mcp.sh",
-      profileDir: "/home/test/.whole-foods-cart/chrome-profile",
+      remoteDebuggingPort: 45678,
     });
     const joined = invocation.args.join(" ");
     expect(invocation.args).toContain("--model");
@@ -57,14 +56,13 @@ describe("Codex invocation", () => {
     expect(joined).not.toContain("workspace-write");
     expect(joined).not.toContain("--skip-git-repo-check");
     expect(joined).toContain(
-      'mcp_servers.playwright.command="/repo/scripts/playwright-extension-mcp.sh"',
+      'mcp_servers.playwright.command="/repo/node_modules/.bin/playwright-mcp"',
     );
     expect(joined).toContain(
-      'mcp_servers.playwright.args=["/repo/node_modules/.bin/playwright-mcp","/repo/runs/id/browser","/home/test/.whole-foods-cart/chrome-profile"]',
+      'mcp_servers.playwright.args=["--cdp-endpoint","http://127.0.0.1:45678","--output-dir","/repo/runs/id/browser","--caps=devtools"]',
     );
     expect(joined).not.toContain("--browser=chrome");
-    expect(joined).not.toContain("--user-data-dir");
-    expect(joined).not.toContain("--cdp-endpoint");
+    expect(joined).toContain("--cdp-endpoint");
     expect(joined).not.toContain("--storage-state");
     expect(joined).not.toContain("PLAYWRIGHT_MCP_EXTENSION_TOKEN");
     expect(joined).not.toContain("--extension");
@@ -77,8 +75,7 @@ describe("Codex invocation", () => {
       reportPath: "/repo/runs/id/report.json",
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
-      playwrightMcpShim: "/repo/scripts/playwright-extension-mcp.sh",
-      profileDir: "/home/test/.whole-foods-cart/chrome-profile",
+      remoteDebuggingPort: 45678,
     });
     expect(invocation.args.at(-1)).toBe("-");
   });

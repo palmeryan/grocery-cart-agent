@@ -10,14 +10,14 @@
     "build": "tsc -p tsconfig.json",
     "cart": "tsx src/cli.ts",
     "login": "bash scripts/open-profile.sh",
-    "setup-extension-token": "bash scripts/setup-extension-token.sh",
     "auth-check": "tsx src/cli.ts auth-check",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "ajv": "8.20.0"
+    "ajv": "8.20.0",
+    "playwright": "1.63.0-alpha-2026-08-31"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -78,7 +78,7 @@ describe("configuration", () => {
     expect(sha256("same")).toHaveLength(64);
   });
 
-  it("configures owned Chrome and the fixed Keychain identity", () => {
+  it("configures owned Chrome and the local MCP binary", () => {
     const config = loadConfig(
       {
         HOME: "/Users/test",
@@ -91,12 +91,8 @@ describe("configuration", () => {
     );
     expect(config.chromeStartupTimeoutMs).toBe(15_000);
     expect(config.chromeStopTimeoutMs).toBe(10_000);
-    expect(config.keychainService).toBe(
-      "whole-foods-cart.playwright-extension",
-    );
-    expect(config.keychainAccount).toBe("test");
-    expect(config.playwrightMcpShim).toBe(
-      "/repo/scripts/playwright-extension-mcp.sh",
+    expect(config.playwrightMcpBin).toBe(
+      "/repo/node_modules/.bin/playwright-mcp",
     );
   });
 });

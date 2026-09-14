@@ -1,4 +1,4 @@
-import { accessSync, constants, readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -13,8 +13,10 @@ import {
 import {
   BrowserLaunchError,
   launchOwnedChrome,
+  reserveLocalPort,
   type LaunchChromeInput,
 } from "./browser.js";
+import { runDeterministicCheck } from "./deterministic-checks.js";
 import {
   buildCodexInvocation,
   CART_MODEL,
@@ -22,16 +24,8 @@ import {
   runCodex,
 } from "./codex.js";
 import { loadConfig } from "./config.js";
-import {
-  assertExtensionTokenAvailable,
-  type KeychainCheckInput,
-} from "./keychain.js";
 import { acquireRunLock, type RunLock } from "./lock.js";
-import {
-  renderAttachmentPrompt,
-  renderAuthPrompt,
-  renderPrompt,
-} from "./prompt.js";
+import { renderPrompt } from "./prompt.js";
 import {
   assertAttachmentReportSafe,
   assertAuthReportSafe,
@@ -43,7 +37,12 @@ import {
   parseReport,
 } from "./validation.js";
 import type { CodexResult } from "./codex.js";
-import type { OwnedChromeSession, RunPaths } from "./types.js";
+import type {
+  AttachmentReport,
+  AuthReport,
+  OwnedChromeSession,
+  RunPaths,
+} from "./types.js";
 
 interface InvokeInput {
   reportPath: string;
@@ -64,8 +63,12 @@ interface CliDependencies {
   invokeCodex?: InvokeCodex;
   signal?: AbortSignal;
   secureReport?: (path: string) => void;
-  checkExtensionToken?: (input: KeychainCheckInput) => void;
   launchBrowser?: (input: LaunchChromeInput) => Promise<OwnedChromeSession>;
+  reservePort?: () => Promise<number>;
+  runDeterministicCheck?: (
+    kind: "auth-check" | "attachment-check",
+    session: OwnedChromeSession,
+  ) => Promise<AuthReport | AttachmentReport>;
   releaseLock?: (lock: RunLock) => void;
 }
 
@@ -79,7 +82,7 @@ const USAGE = `usage: cart build <request.json>
        cart auth-check
        cart attachment-check`;
 
-const WHOLE_FOODS_URL = "https://www.amazon.com/wholefoods";
+const WHOLE_FOODS_URL = "https://www.wholefoodsmarket.com/grocery/search";
 const EXAMPLE_URL = "https://example.com";
 
 /**
@@ -154,8 +157,6 @@ export async function runCli(
   const rootDir = resolve(dependencies.rootDir ?? process.cwd());
   const secure =
     dependencies.secureReport ?? ((path: string) => secureReport(path));
-  const checkExtensionToken =
-    dependencies.checkExtensionToken ?? assertExtensionTokenAvailable;
   const launchBrowser = dependencies.launchBrowser ?? launchOwnedChrome;
   const releaseLock =
     dependencies.releaseLock ?? ((lock: RunLock) => lock.release());
@@ -230,13 +231,9 @@ export async function runCli(
   try {
     const config = loadConfig(dependencies.env ?? process.env, rootDir);
     assertExecutable(config.chromeExecutable, "Chrome executable");
-    assertExecutable(config.playwrightMcpBin, "Playwright MCP");
-    assertExecutable(config.playwrightMcpShim, "Playwright MCP shim");
-
-    checkExtensionToken({
-      account: config.keychainAccount,
-      service: config.keychainService,
-    });
+    if (parsed.command === "build") {
+      assertExecutable(config.playwrightMcpBin, "Playwright MCP");
+    }
 
     const requestSource =
       parsed.command === "build" ? resolve(parsed.requestPath!) : undefined;
@@ -260,6 +257,8 @@ export async function runCli(
     }
 
     try {
+      const remoteDebuggingPort =
+        await (dependencies.reservePort ?? reserveLocalPort)();
       browser = await launchBrowser({
         executable: config.chromeExecutable,
         profileDir: config.profileDir,
@@ -269,6 +268,7 @@ export async function runCli(
           parsed.command === "attachment-check"
             ? EXAMPLE_URL
             : WHOLE_FOODS_URL,
+        ...(remoteDebuggingPort === undefined ? {} : { remoteDebuggingPort }),
       });
     } catch (error) {
       if (error instanceof BrowserLaunchError) {
@@ -283,7 +283,7 @@ export async function runCli(
       return await finish();
     }
 
-    let prompt: string;
+    let prompt: string | undefined;
     if (parsed.command === "build") {
       const previousReport = findPreviousReport(config.runsDir, requestSha256);
       prompt = renderPrompt({
@@ -293,13 +293,6 @@ export async function runCli(
         previousReport,
         browserOutputDir: paths.browserOutputDir,
       });
-    } else if (parsed.command === "auth-check") {
-      prompt = renderAuthPrompt({
-        deliveryMode: config.deliveryMode,
-        browserOutputDir: paths.browserOutputDir,
-      });
-    } else {
-      prompt = renderAttachmentPrompt();
     }
 
     const signal = dependencies.signal;
@@ -313,22 +306,61 @@ export async function runCli(
       return await finish();
     }
 
+    if (parsed.command !== "build") {
+      try {
+        const check = dependencies.runDeterministicCheck ?? runDeterministicCheck;
+        const report = await check(parsed.command, browser);
+        writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+          mode: 0o600,
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        exitCode = 2;
+        return await finish();
+      }
+
+      try {
+        if (parsed.command === "auth-check") {
+          const report = parseAuthReport(readFileSync(paths.reportPath, "utf8"));
+          assertAuthReportSafe(report);
+          console.log(`Auth check ${report.runStatus}: ${paths.reportPath}`);
+          exitCode = report.runStatus === "failed" ? 1 : 0;
+        } else {
+          const report = parseAttachmentReport(
+            readFileSync(paths.reportPath, "utf8"),
+          );
+          assertAttachmentReportSafe(report);
+          console.log(`Attachment check connected: ${paths.reportPath}`);
+          exitCode = 0;
+        }
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        exitCode = 1;
+      }
+      return await finish();
+    }
+
     const invoke: InvokeCodex =
       dependencies.invokeCodex ??
       (async (_input, runSignal) => {
+        const remoteDebuggingPort = browser?.remoteDebuggingPort;
+        if (remoteDebuggingPort === undefined) {
+          throw new Error(
+            "Owned Chrome did not expose a remote debugging port for the cart build",
+          );
+        }
         const invocation = buildCodexInvocation({
           rootDir,
           browserOutputDir: paths!.browserOutputDir,
           reportPath: paths!.reportPath,
           schemaPath: schemaPathFor(rootDir, parsed.command),
           playwrightMcpBin: config.playwrightMcpBin,
-          playwrightMcpShim: config.playwrightMcpShim,
-          profileDir: config.profileDir,
+          remoteDebuggingPort,
         });
         return runCodex({
           executable: config.codexBin,
           args: invocation.args,
-          prompt,
+          prompt: prompt!,
           eventsPath: paths!.eventsPath,
           stderrPath: paths!.stderrPath,
           timeoutMs: config.maxRunMs,
@@ -342,7 +374,7 @@ export async function runCli(
         {
           reportPath: paths.reportPath,
           requestSha256,
-          prompt,
+          prompt: prompt!,
         },
         signal,
       );
@@ -370,34 +402,6 @@ export async function runCli(
         } else {
           console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
           exitCode = report.runStatus === "failed" ? 1 : 0;
-        }
-      } else if (parsed.command === "auth-check") {
-        const report = parseAuthReport(readFileSync(paths.reportPath, "utf8"));
-        try {
-          assertAuthReportSafe(report);
-          console.log(`Auth check ${report.runStatus}: ${paths.reportPath}`);
-          exitCode = report.runStatus === "failed" ? 1 : 0;
-        } catch (error) {
-          // Auth gate/safety failures are soft failures (exit 1), not
-          // orchestration/schema failures (exit 2).
-          console.error(
-            error instanceof Error ? error.message : "Auth check failed",
-          );
-          exitCode = 1;
-        }
-      } else {
-        const report = parseAttachmentReport(
-          readFileSync(paths.reportPath, "utf8"),
-        );
-        try {
-          assertAttachmentReportSafe(report);
-          console.log(`Attachment check connected: ${paths.reportPath}`);
-          exitCode = 0;
-        } catch (error) {
-          console.error(
-            error instanceof Error ? error.message : "Attachment check failed",
-          );
-          exitCode = 1;
         }
       }
     } catch (error) {
