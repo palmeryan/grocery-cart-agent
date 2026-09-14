@@ -15,7 +15,12 @@ import {
   launchOwnedChrome,
   type LaunchChromeInput,
 } from "./browser.js";
-import { buildCodexInvocation, runCodex } from "./codex.js";
+import {
+  buildCodexInvocation,
+  CART_MODEL,
+  CART_REASONING_EFFORT,
+  runCodex,
+} from "./codex.js";
 import { loadConfig } from "./config.js";
 import {
   assertExtensionTokenAvailable,
@@ -248,7 +253,10 @@ export async function runCli(
     paths = createRunPaths(rootDir, new Date(), parsed.command);
     if (parsed.command === "build") {
       writeRequestSnapshot(requestSource!, paths.requestPath);
-      writeRunMetadata(paths, requestSource!, requestSha256);
+      writeRunMetadata(paths, requestSource!, requestSha256, {
+        model: CART_MODEL,
+        reasoningEffort: CART_REASONING_EFFORT,
+      });
     }
 
     try {
@@ -281,13 +289,13 @@ export async function runCli(
       prompt = renderPrompt({
         request: request!,
         requestSha256,
-        expectedPostalCode: config.expectedPostalCode,
+        deliveryMode: config.deliveryMode,
         previousReport,
         browserOutputDir: paths.browserOutputDir,
       });
     } else if (parsed.command === "auth-check") {
       prompt = renderAuthPrompt({
-        expectedPostalCode: config.expectedPostalCode,
+        deliveryMode: config.deliveryMode,
         browserOutputDir: paths.browserOutputDir,
       });
     } else {
@@ -315,6 +323,7 @@ export async function runCli(
           schemaPath: schemaPathFor(rootDir, parsed.command),
           playwrightMcpBin: config.playwrightMcpBin,
           playwrightMcpShim: config.playwrightMcpShim,
+          profileDir: config.profileDir,
         });
         return runCodex({
           executable: config.codexBin,
@@ -380,9 +389,16 @@ export async function runCli(
         const report = parseAttachmentReport(
           readFileSync(paths.reportPath, "utf8"),
         );
-        assertAttachmentReportSafe(report);
-        console.log(`Attachment check connected: ${paths.reportPath}`);
-        exitCode = 0;
+        try {
+          assertAttachmentReportSafe(report);
+          console.log(`Attachment check connected: ${paths.reportPath}`);
+          exitCode = 0;
+        } catch (error) {
+          console.error(
+            error instanceof Error ? error.message : "Attachment check failed",
+          );
+          exitCode = 1;
+        }
       }
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));

@@ -2,6 +2,10 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
+/** Fixed model settings for reproducible cart runs. */
+export const CART_MODEL = "gpt-5.6-terra" as const;
+export const CART_REASONING_EFFORT = "medium" as const;
+
 export interface CodexInvocationInput {
   rootDir: string;
   browserOutputDir: string;
@@ -9,6 +13,7 @@ export interface CodexInvocationInput {
   schemaPath: string;
   playwrightMcpBin: string;
   playwrightMcpShim: string;
+  profileDir: string;
 }
 
 export interface CodexInvocation {
@@ -44,10 +49,15 @@ export function buildCodexInvocation(
   const mcpArgs = [
     input.playwrightMcpBin,
     input.browserOutputDir,
+    input.profileDir,
   ];
   return {
     args: [
       "exec",
+      "--model",
+      CART_MODEL,
+      "-c",
+      `model_reasoning_effort="${CART_REASONING_EFFORT}"`,
       "--ignore-user-config",
       "--strict-config",
       "--ephemeral",

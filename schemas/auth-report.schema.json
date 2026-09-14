@@ -5,16 +5,18 @@
   "required": [
     "runStatus",
     "authenticated",
-    "expectedLocationConfirmed",
+    "deliveryModeConfirmed",
+    "deliveryAddressConfirmed",
     "wholeFoodsStorefrontConfirmed",
     "checkoutVisited",
     "settingsChanged",
     "failureReason"
   ],
   "properties": {
-    "runStatus": { "enum": ["completed", "failed"] },
+    "runStatus": { "type": "string", "enum": ["completed", "failed"] },
     "authenticated": { "type": "boolean" },
-    "expectedLocationConfirmed": { "type": "boolean" },
+    "deliveryModeConfirmed": { "type": "boolean" },
+    "deliveryAddressConfirmed": { "type": "boolean" },
     "wholeFoodsStorefrontConfirmed": { "type": "boolean" },
     "checkoutVisited": { "type": "boolean" },
     "settingsChanged": { "type": "boolean" },

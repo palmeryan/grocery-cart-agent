@@ -39,7 +39,8 @@ export interface CartReport {
   runStatus: "completed" | "partial" | "failed";
   requestSha256: string;
   authenticated: boolean;
-  expectedLocationConfirmed: boolean;
+  deliveryModeConfirmed: boolean;
+  deliveryAddressConfirmed: boolean;
   wholeFoodsStorefrontConfirmed: boolean;
   checkoutVisited: boolean;
   settingsChanged: boolean;
@@ -75,7 +76,8 @@ export interface OwnedChromeSession {
 export interface AuthReport {
   runStatus: "completed" | "failed";
   authenticated: boolean;
-  expectedLocationConfirmed: boolean;
+  deliveryModeConfirmed: boolean;
+  deliveryAddressConfirmed: boolean;
   wholeFoodsStorefrontConfirmed: boolean;
   checkoutVisited: boolean;
   settingsChanged: boolean;
@@ -84,8 +86,9 @@ export interface AuthReport {
 
 export interface AttachmentReport {
   connected: boolean;
-  url: "https://example.com/";
-  title: "Example Domain";
+  url: "https://example.com/" | null;
+  title: "Example Domain" | null;
   navigationPerformed: boolean;
   interactionPerformed: boolean;
+  failureReason: string | null;
 }
