@@ -1,6 +1,7 @@
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -48,6 +49,15 @@ export function createRunPaths(rootDir: string, now = new Date()): RunPaths {
 export function writeRequestSnapshot(source: string, destination: string): void {
   cpSync(source, destination, { errorOnExist: true });
   chmodSync(destination, 0o600);
+}
+
+/**
+ * Best-effort: if Codex wrote report.json, force owner-only mode.
+ * No-op when the file is absent.
+ */
+export function secureReport(path: string): void {
+  if (!existsSync(path)) return;
+  chmodSync(path, 0o600);
 }
 
 export function findPreviousReport(

@@ -29,12 +29,44 @@ export class ValidationFailure extends Error {
   }
 }
 
+const uniqueDuplicates = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) duplicates.add(value);
+    else seen.add(value);
+  }
+  return [...duplicates];
+};
+
+export function assertRequestIdentity(request: GroceryRequest): void {
+  const recipeIds = request.recipes.map((recipe) => recipe.id);
+  const ingredientIds = request.recipes.flatMap((recipe) =>
+    recipe.ingredients.map((ingredient) => ingredient.id),
+  );
+  const duplicateRecipes = uniqueDuplicates(recipeIds);
+  const duplicateIngredients = uniqueDuplicates(ingredientIds);
+  const problems = [
+    duplicateRecipes.length > 0
+      ? `duplicate recipe IDs: ${duplicateRecipes.join(", ")}`
+      : "",
+    duplicateIngredients.length > 0
+      ? `duplicate ingredient IDs: ${duplicateIngredients.join(", ")}`
+      : "",
+  ].filter(Boolean);
+  if (problems.length > 0) {
+    throw new Error(`Invalid request identity: ${problems.join("; ")}`);
+  }
+}
+
 export function loadRequest(path: string): GroceryRequest {
   const value: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (!requestValidator(value)) {
     throw new ValidationFailure("request", requestValidator.errors);
   }
-  return value as GroceryRequest;
+  const request = value as GroceryRequest;
+  assertRequestIdentity(request);
+  return request;
 }
 
 export function parseReport(text: string): CartReport {
@@ -70,5 +102,30 @@ export function assertReportMatchesRequest(
   ].filter(Boolean);
   if (problems.length > 0) {
     throw new Error(`Report does not match request: ${problems.join("; ")}`);
+  }
+}
+
+export function assertReportPreflight(report: CartReport): void {
+  const missingGates = (
+    [
+      ["authenticated", report.authenticated],
+      ["expectedLocationConfirmed", report.expectedLocationConfirmed],
+      ["wholeFoodsStorefrontConfirmed", report.wholeFoodsStorefrontConfirmed],
+    ] as const
+  )
+    .filter(([, ok]) => !ok)
+    .map(([name]) => name);
+  if (missingGates.length > 0) {
+    throw new Error(
+      `Report preflight failed: ${missingGates.join(", ")} must be true`,
+    );
+  }
+  if (
+    report.runStatus === "completed" &&
+    report.selections.some((selection) => selection.status === "skipped")
+  ) {
+    throw new Error(
+      'Report preflight failed: runStatus "completed" cannot include skipped selections',
+    );
   }
 }

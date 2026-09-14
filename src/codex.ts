@@ -30,6 +30,8 @@ export interface RunCodexInput {
   timeoutMs: number;
   /** SIGTERM→SIGKILL grace period after timeout (default 2000ms). */
   killGraceMs?: number;
+  /** Optional abort signal (Ctrl-C / SIGTERM path). */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_KILL_GRACE_MS = 2_000;
@@ -258,18 +260,25 @@ export function createKillEscalation(
 export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
   const killGraceMs = input.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
   let timedOut = false;
+  let aborted = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let events: WriteStream | undefined;
   let stderr: WriteStream | undefined;
   let child: ChildProcess | undefined;
   let groupPid: number | undefined;
   let escalation: KillEscalation | undefined;
+  let removeAbortListener: (() => void) | undefined;
 
   const clearTimeoutTimer = (): void => {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
+  };
+
+  const detachAbort = (): void => {
+    removeAbortListener?.();
+    removeAbortListener = undefined;
   };
 
   try {
@@ -279,7 +288,7 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
     const spawned = spawn(input.executable, input.args, {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
-      // New process group so timeout can reap MCP/Chrome descendants.
+      // New process group so timeout/abort can reap MCP/Chrome descendants.
       detached: true,
     });
     child = spawned;
@@ -288,22 +297,56 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
     return await new Promise<CodexResult>((resolve, reject) => {
       let settled = false;
       let closeResult: CodexResult | undefined;
+      let cancelRequested = false;
+
+      const needsEscalationComplete = (): boolean =>
+        Boolean(cancelRequested || timedOut || aborted);
 
       const trySettle = (): void => {
         if (settled || !closeResult) return;
-        // After timeout, hold settle until SIGKILL escalation has finished.
-        if (closeResult.timedOut && !(escalation?.isComplete() ?? false)) {
+        // After timeout/abort, hold settle until SIGKILL escalation finished.
+        if (needsEscalationComplete() && !(escalation?.isComplete() ?? false)) {
           return;
         }
         settled = true;
         clearTimeoutTimer();
+        detachAbort();
         resolve(closeResult);
+      };
+
+      const armEscalation = (): void => {
+        if (escalation) return;
+        escalation = createKillEscalation({
+          pgid: groupPid,
+          graceMs: killGraceMs,
+        });
+        void escalation.done.then(() => {
+          trySettle();
+        });
+      };
+
+      const beginCancellation = (asTimeout: boolean): void => {
+        if (settled) return;
+        cancelRequested = true;
+        if (asTimeout) timedOut = true;
+        else aborted = true;
+        if (closeResult) {
+          closeResult = {
+            ...closeResult,
+            timedOut: closeResult.timedOut || timedOut,
+          };
+        }
+        clearTimeoutTimer();
+        signalProcessGroup(groupPid, "SIGTERM");
+        armEscalation();
+        trySettle();
       };
 
       const fail = (error: Error): void => {
         if (settled) return;
         settled = true;
         clearTimeoutTimer();
+        detachAbort();
         const finishFail = (): void => {
           reject(error);
         };
@@ -331,23 +374,22 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
       spawned.stdin.end(input.prompt);
 
       timer = setTimeout(() => {
-        timedOut = true;
-        if (closeResult) {
-          closeResult = { ...closeResult, timedOut: true };
-        }
-        signalProcessGroup(groupPid, "SIGTERM");
-
-        // Shared coordinator: timer path and fail path both complete `done`.
-        escalation = createKillEscalation({
-          pgid: groupPid,
-          graceMs: killGraceMs,
-        });
-        void escalation.done.then(() => {
-          trySettle();
-        });
-
-        trySettle();
+        beginCancellation(true);
       }, input.timeoutMs);
+
+      const onAbort = (): void => {
+        beginCancellation(false);
+      };
+      if (input.signal) {
+        if (input.signal.aborted) {
+          onAbort();
+        } else {
+          input.signal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => {
+            input.signal?.removeEventListener("abort", onAbort);
+          };
+        }
+      }
 
       spawned.once("error", (error) => {
         fail(error);
@@ -358,18 +400,20 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
           signal,
           timedOut,
         };
-        if (!timedOut) {
+        if (!needsEscalationComplete()) {
           clearTimeoutTimer();
+          detachAbort();
           trySettle();
           return;
         }
-        // Leader closed after timeout: do NOT cancel escalation.
+        // Leader closed after timeout/abort: do NOT cancel escalation.
         trySettle();
       });
     });
   } finally {
     clearTimeoutTimer();
-    // Await armed escalation so fail/timer both unblock this path.
+    detachAbort();
+    // Await armed escalation so fail/timer/abort all unblock this path.
     if (escalation) {
       await escalation.done;
     }

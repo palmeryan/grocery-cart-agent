@@ -156,6 +156,36 @@ describe("Codex process", () => {
     expect(processAlive(descendantPid)).toBe(false);
   });
 
+  it("reaps descendants when aborted via AbortSignal", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-abort-"));
+    const markerPath = join(runDir, "descendant.pid");
+    const controller = new AbortController();
+    const runPromise = runCodex({
+      executable: process.execPath,
+      args: [fakeCodex, "--spawn-term-resistant-descendant", markerPath],
+      prompt: "test",
+      eventsPath: join(runDir, "events.jsonl"),
+      stderrPath: join(runDir, "stderr.log"),
+      timeoutMs: 30_000,
+      killGraceMs: 100,
+      signal: controller.signal,
+    });
+
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(markerPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(existsSync(markerPath)).toBe(true);
+    const descendantPid = Number(readFileSync(markerPath, "utf8"));
+    expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
+
+    controller.abort();
+    const result = await runPromise;
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(processAlive(descendantPid)).toBe(false);
+  });
+
   it("fails fast when an exclusive log file cannot be opened", async () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-log-"));
     const eventsPath = join(runDir, "events.jsonl");
@@ -222,4 +252,3 @@ describe("Kill escalation coordinator", () => {
     for (const handle of handles) clearTimeout(handle);
   });
 });
-

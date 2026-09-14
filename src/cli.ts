@@ -5,6 +5,7 @@ import {
   canonicalRequest,
   createRunPaths,
   findPreviousReport,
+  secureReport,
   sha256,
   writeRequestSnapshot,
   writeRunMetadata,
@@ -15,6 +16,7 @@ import { acquireRunLock } from "./lock.js";
 import { renderPrompt } from "./prompt.js";
 import {
   assertReportMatchesRequest,
+  assertReportPreflight,
   loadRequest,
   parseReport,
 } from "./validation.js";
@@ -26,10 +28,51 @@ interface InvokeInput {
   prompt: string;
 }
 
+type InvokeCodex = (
+  input: InvokeInput,
+  signal?: AbortSignal,
+) => Promise<CodexResult>;
+
 interface CliDependencies {
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
-  invokeCodex?: (input: InvokeInput) => Promise<CodexResult>;
+  invokeCodex?: InvokeCodex;
+  signal?: AbortSignal;
+  secureReport?: (path: string) => void;
+}
+
+export interface SignalHandlerOptions {
+  processObject?: NodeJS.Process;
+  signals?: NodeJS.Signals[];
+  controller?: AbortController;
+}
+
+/**
+ * Install SIGINT/SIGTERM handlers only for the real CLI entrypoint lifetime.
+ * Handlers abort the controller and are always removed in `finally`.
+ */
+export async function withCliSignalHandlers<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  options: SignalHandlerOptions = {},
+): Promise<T> {
+  const processObject = options.processObject ?? process;
+  const signals = options.signals ?? ["SIGINT", "SIGTERM"];
+  const controller = options.controller ?? new AbortController();
+
+  const onSignal = (): void => {
+    if (!controller.signal.aborted) controller.abort();
+  };
+
+  for (const signal of signals) {
+    processObject.on(signal, onSignal);
+  }
+  try {
+    return await run(controller.signal);
+  } finally {
+    for (const signal of signals) {
+      processObject.off(signal, onSignal);
+    }
+  }
 }
 
 export async function runCli(
@@ -43,6 +86,8 @@ export async function runCli(
 
   const rootDir = resolve(dependencies.rootDir ?? process.cwd());
   const requestSource = resolve(argv[1]!);
+  const secure =
+    dependencies.secureReport ?? ((path: string) => secureReport(path));
   try {
     const request = loadRequest(requestSource);
     const requestSha256 = sha256(canonicalRequest(request));
@@ -67,29 +112,48 @@ export async function runCli(
         previousReport,
         browserOutputDir: paths.browserOutputDir,
       });
-      const invoke = dependencies.invokeCodex ?? (async () => {
-        const invocation = buildCodexInvocation({
-          rootDir,
-          profileDir: config.profileDir,
-          browserOutputDir: paths.browserOutputDir,
+      const signal = dependencies.signal;
+      if (signal?.aborted) {
+        console.error("Cart run aborted before Codex started");
+        return 1;
+      }
+      const invoke: InvokeCodex =
+        dependencies.invokeCodex ??
+        (async (_input, runSignal) => {
+          const invocation = buildCodexInvocation({
+            rootDir,
+            profileDir: config.profileDir,
+            browserOutputDir: paths.browserOutputDir,
+            reportPath: paths.reportPath,
+            schemaPath: join(rootDir, "schemas", "report.schema.json"),
+            playwrightMcpBin: config.playwrightMcpBin,
+          });
+          return runCodex({
+            executable: config.codexBin,
+            args: invocation.args,
+            prompt,
+            eventsPath: paths.eventsPath,
+            stderrPath: paths.stderrPath,
+            timeoutMs: config.maxRunMs,
+            ...(runSignal ? { signal: runSignal } : {}),
+          });
+        });
+      const result = await invoke(
+        {
           reportPath: paths.reportPath,
-          schemaPath: join(rootDir, "schemas", "report.schema.json"),
-          playwrightMcpBin: config.playwrightMcpBin,
-        });
-        return runCodex({
-          executable: config.codexBin,
-          args: invocation.args,
+          requestSha256,
           prompt,
-          eventsPath: paths.eventsPath,
-          stderrPath: paths.stderrPath,
-          timeoutMs: config.maxRunMs,
-        });
-      });
-      const result = await invoke({
-        reportPath: paths.reportPath,
-        requestSha256,
-        prompt,
-      });
+        },
+        signal,
+      );
+      // Always tighten report permissions if Codex produced one, including
+      // failure/abort paths. Lock release still happens in `finally` even if
+      // chmod throws.
+      secure(paths.reportPath);
+      if (signal?.aborted) {
+        console.error(`Cart run aborted; inspect ${paths.runDir}`);
+        return 1;
+      }
       if (result.timedOut || result.exitCode !== 0) {
         console.error(`Codex failed; inspect ${paths.runDir}`);
         return 1;
@@ -99,6 +163,7 @@ export async function runCli(
       if (report.requestSha256 !== requestSha256) {
         throw new Error("Report requestSha256 does not match the request");
       }
+      assertReportPreflight(report);
       if (report.checkoutVisited || report.settingsChanged) {
         console.error(`Safety condition violated; inspect ${paths.runDir}`);
         return 1;
@@ -119,5 +184,8 @@ const isEntryPoint =
   import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntryPoint) {
-  process.exitCode = await runCli(process.argv.slice(2));
+  // Signal handlers are installed only for the real CLI process lifetime.
+  process.exitCode = await withCliSignalHandlers((signal) =>
+    runCli(process.argv.slice(2), { signal }),
+  );
 }
