@@ -10,6 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "cart": "tsx src/cli.ts",
     "login": "bash scripts/open-profile.sh",
+    "setup-extension-token": "bash scripts/setup-extension-token.sh",
+    "auth-check": "tsx src/cli.ts auth-check",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

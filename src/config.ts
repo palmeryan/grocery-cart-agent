@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 export interface AppConfig {
@@ -9,7 +9,25 @@ export interface AppConfig {
   maxRunMs: number;
   codexBin: string;
   playwrightMcpBin: string;
+  chromeExecutable: string;
+  chromeStartupTimeoutMs: number;
+  chromeStopTimeoutMs: number;
+  keychainService: string;
+  keychainAccount: string;
+  playwrightMcpShim: string;
 }
+
+const parsePositiveInt = (
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number => {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+};
 
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -47,5 +65,23 @@ export function loadConfig(
       ".bin",
       "playwright-mcp",
     ),
+    chromeExecutable:
+      env.CHROME_EXECUTABLE ??
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    chromeStartupTimeoutMs: parsePositiveInt(
+      env.WFM_CHROME_STARTUP_TIMEOUT_MS,
+      15_000,
+      "WFM_CHROME_STARTUP_TIMEOUT_MS",
+    ),
+    chromeStopTimeoutMs: parsePositiveInt(
+      env.WFM_CHROME_STOP_TIMEOUT_MS,
+      10_000,
+      "WFM_CHROME_STOP_TIMEOUT_MS",
+    ),
+    keychainService: "whole-foods-cart.playwright-extension",
+    keychainAccount: env.USER ?? userInfo().username,
+    playwrightMcpShim:
+      env.PLAYWRIGHT_MCP_SHIM ??
+      join(absoluteRoot, "scripts", "playwright-extension-mcp.sh"),
   };
 }

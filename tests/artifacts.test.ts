@@ -65,4 +65,27 @@ describe("configuration", () => {
     expect(config.expectedPostalCode).toBe("02139");
     expect(sha256("same")).toHaveLength(64);
   });
+
+  it("configures owned Chrome and the fixed Keychain identity", () => {
+    const config = loadConfig(
+      {
+        HOME: "/Users/test",
+        USER: "test",
+        WFM_EXPECTED_POSTAL_CODE: "00000",
+      },
+      "/repo",
+    );
+    expect(config.chromeExecutable).toBe(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    );
+    expect(config.chromeStartupTimeoutMs).toBe(15_000);
+    expect(config.chromeStopTimeoutMs).toBe(10_000);
+    expect(config.keychainService).toBe(
+      "whole-foods-cart.playwright-extension",
+    );
+    expect(config.keychainAccount).toBe("test");
+    expect(config.playwrightMcpShim).toBe(
+      "/repo/scripts/playwright-extension-mcp.sh",
+    );
+  });
 });
