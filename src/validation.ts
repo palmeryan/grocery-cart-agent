@@ -106,19 +106,24 @@ export function assertReportMatchesRequest(
 }
 
 export function assertReportPreflight(report: CartReport): void {
-  const missingGates = (
-    [
-      ["authenticated", report.authenticated],
-      ["expectedLocationConfirmed", report.expectedLocationConfirmed],
-      ["wholeFoodsStorefrontConfirmed", report.wholeFoodsStorefrontConfirmed],
-    ] as const
-  )
-    .filter(([, ok]) => !ok)
-    .map(([name]) => name);
-  if (missingGates.length > 0) {
-    throw new Error(
-      `Report preflight failed: ${missingGates.join(", ")} must be true`,
-    );
+  // Auth/location/storefront gates apply to successful-path statuses only.
+  // Honest failed reports (e.g. auth never established) may leave them false
+  // and still exit 1 via runStatus.
+  if (report.runStatus === "completed" || report.runStatus === "partial") {
+    const missingGates = (
+      [
+        ["authenticated", report.authenticated],
+        ["expectedLocationConfirmed", report.expectedLocationConfirmed],
+        ["wholeFoodsStorefrontConfirmed", report.wholeFoodsStorefrontConfirmed],
+      ] as const
+    )
+      .filter(([, ok]) => !ok)
+      .map(([name]) => name);
+    if (missingGates.length > 0) {
+      throw new Error(
+        `Report preflight failed: ${missingGates.join(", ")} must be true`,
+      );
+    }
   }
   if (
     report.runStatus === "completed" &&

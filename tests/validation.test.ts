@@ -155,21 +155,37 @@ describe("report validation", () => {
   });
 
   it.each([
-    ["authenticated", { authenticated: false }],
-    ["expectedLocationConfirmed", { expectedLocationConfirmed: false }],
-    ["wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
+    ["completed", "authenticated", { authenticated: false }],
+    ["completed", "expectedLocationConfirmed", { expectedLocationConfirmed: false }],
+    ["completed", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
+    ["partial", "authenticated", { authenticated: false }],
+    ["partial", "expectedLocationConfirmed", { expectedLocationConfirmed: false }],
+    ["partial", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
   ] as const)(
-    "rejects preflight when %s is false",
-    (field, patch) => {
+    "rejects %s preflight when %s is false",
+    (runStatus, field, patch) => {
       const report = parseReport(
         readFileSync(fixture("valid-report.json"), "utf8"),
       );
+      report.runStatus = runStatus;
       Object.assign(report, patch);
       expect(() => assertReportPreflight(report)).toThrow(
         new RegExp(field),
       );
     },
   );
+
+  it("allows failed reports with false auth/location gates", () => {
+    const report = parseReport(
+      readFileSync(fixture("valid-report.json"), "utf8"),
+    );
+    report.runStatus = "failed";
+    report.authenticated = false;
+    report.expectedLocationConfirmed = false;
+    report.wholeFoodsStorefrontConfirmed = false;
+    report.failureReason = "not authenticated";
+    expect(() => assertReportPreflight(report)).not.toThrow();
+  });
 
   it("rejects completed status when any selection is skipped", () => {
     const report = parseReport(

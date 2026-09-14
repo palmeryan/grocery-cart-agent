@@ -186,6 +186,88 @@ describe("Codex process", () => {
     expect(processAlive(descendantPid)).toBe(false);
   });
 
+  it("settles promptly when started with an already-aborted signal", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-preabort-"));
+    const markerPath = join(runDir, "descendant.pid");
+    const controller = new AbortController();
+    controller.abort();
+    const started = Date.now();
+    const result = await runCodex({
+      executable: process.execPath,
+      args: [fakeCodex, "--spawn-term-resistant-descendant", markerPath],
+      prompt: "test",
+      eventsPath: join(runDir, "events.jsonl"),
+      stderrPath: join(runDir, "stderr.log"),
+      timeoutMs: 30_000,
+      killGraceMs: 50,
+      signal: controller.signal,
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    // If a descendant appeared, it must already be reaped.
+    if (existsSync(markerPath)) {
+      const descendantPid = Number(readFileSync(markerPath, "utf8"));
+      if (Number.isInteger(descendantPid) && descendantPid > 0) {
+        expect(processAlive(descendantPid)).toBe(false);
+      }
+    }
+  });
+
+  it("does not miss abort that fires between subscribe and recheck", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-race-"));
+    const markerPath = join(runDir, "descendant.pid");
+
+    // Signal double: first aborted read is false so subscribe path is taken;
+    // addEventListener immediately aborts (simulating race), and the post-
+    // subscribe recheck must observe aborted=true.
+    let aborted = false;
+    let listener: (() => void) | undefined;
+    const signal = {
+      get aborted() {
+        return aborted;
+      },
+      addEventListener(
+        _type: string,
+        handler: () => void,
+        _options?: { once?: boolean },
+      ) {
+        listener = handler;
+        // Abort races in right after subscription registration.
+        aborted = true;
+        queueMicrotask(() => {
+          // Also deliver the event in case implementation relies on it only.
+          handler();
+        });
+      },
+      removeEventListener(_type: string, _handler: () => void) {
+        listener = undefined;
+      },
+    } as unknown as AbortSignal;
+
+    const started = Date.now();
+    const result = await runCodex({
+      executable: process.execPath,
+      args: [fakeCodex, "--spawn-term-resistant-descendant", markerPath],
+      prompt: "test",
+      eventsPath: join(runDir, "events.jsonl"),
+      stderrPath: join(runDir, "stderr.log"),
+      timeoutMs: 30_000,
+      killGraceMs: 50,
+      signal,
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    void listener;
+    if (existsSync(markerPath)) {
+      const descendantPid = Number(readFileSync(markerPath, "utf8"));
+      if (Number.isInteger(descendantPid) && descendantPid > 0) {
+        expect(processAlive(descendantPid)).toBe(false);
+      }
+    }
+  });
+
   it("fails fast when an exclusive log file cannot be opened", async () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-log-"));
     const eventsPath = join(runDir, "events.jsonl");

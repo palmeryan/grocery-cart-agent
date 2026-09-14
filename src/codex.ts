@@ -373,24 +373,8 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
       spawned.stderr.pipe(stderr!);
       spawned.stdin.end(input.prompt);
 
-      timer = setTimeout(() => {
-        beginCancellation(true);
-      }, input.timeoutMs);
-
-      const onAbort = (): void => {
-        beginCancellation(false);
-      };
-      if (input.signal) {
-        if (input.signal.aborted) {
-          onAbort();
-        } else {
-          input.signal.addEventListener("abort", onAbort, { once: true });
-          removeAbortListener = () => {
-            input.signal?.removeEventListener("abort", onAbort);
-          };
-        }
-      }
-
+      // Attach lifecycle handlers BEFORE any abort/timeout cancellation can
+      // kill the child, so a pre-aborted signal cannot race past close/error.
       spawned.once("error", (error) => {
         fail(error);
       });
@@ -409,6 +393,25 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
         // Leader closed after timeout/abort: do NOT cancel escalation.
         trySettle();
       });
+
+      timer = setTimeout(() => {
+        beginCancellation(true);
+      }, input.timeoutMs);
+
+      const onAbort = (): void => {
+        beginCancellation(false);
+      };
+      if (input.signal) {
+        // Subscribe first, then re-check aborted so an abort between the
+        // initial observation and subscription cannot be missed.
+        input.signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => {
+          input.signal?.removeEventListener("abort", onAbort);
+        };
+        if (input.signal.aborted) {
+          onAbort();
+        }
+      }
     });
   } finally {
     clearTimeoutTimer();

@@ -138,38 +138,45 @@ export async function runCli(
             ...(runSignal ? { signal: runSignal } : {}),
           });
         });
-      const result = await invoke(
-        {
-          reportPath: paths.reportPath,
-          requestSha256,
-          prompt,
-        },
-        signal,
-      );
-      // Always tighten report permissions if Codex produced one, including
-      // failure/abort paths. Lock release still happens in `finally` even if
-      // chmod throws.
-      secure(paths.reportPath);
-      if (signal?.aborted) {
-        console.error(`Cart run aborted; inspect ${paths.runDir}`);
-        return 1;
+      // Nested finally: if invocation was attempted (including reject after a
+      // written report), always tighten report permissions. Outer finally still
+      // releases the lock even when chmod throws.
+      let invocationAttempted = false;
+      try {
+        invocationAttempted = true;
+        const result = await invoke(
+          {
+            reportPath: paths.reportPath,
+            requestSha256,
+            prompt,
+          },
+          signal,
+        );
+        if (signal?.aborted) {
+          console.error(`Cart run aborted; inspect ${paths.runDir}`);
+          return 1;
+        }
+        if (result.timedOut || result.exitCode !== 0) {
+          console.error(`Codex failed; inspect ${paths.runDir}`);
+          return 1;
+        }
+        const report = parseReport(readFileSync(paths.reportPath, "utf8"));
+        assertReportMatchesRequest(report, request);
+        if (report.requestSha256 !== requestSha256) {
+          throw new Error("Report requestSha256 does not match the request");
+        }
+        assertReportPreflight(report);
+        if (report.checkoutVisited || report.settingsChanged) {
+          console.error(`Safety condition violated; inspect ${paths.runDir}`);
+          return 1;
+        }
+        console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
+        return report.runStatus === "failed" ? 1 : 0;
+      } finally {
+        if (invocationAttempted) {
+          secure(paths.reportPath);
+        }
       }
-      if (result.timedOut || result.exitCode !== 0) {
-        console.error(`Codex failed; inspect ${paths.runDir}`);
-        return 1;
-      }
-      const report = parseReport(readFileSync(paths.reportPath, "utf8"));
-      assertReportMatchesRequest(report, request);
-      if (report.requestSha256 !== requestSha256) {
-        throw new Error("Report requestSha256 does not match the request");
-      }
-      assertReportPreflight(report);
-      if (report.checkoutVisited || report.settingsChanged) {
-        console.error(`Safety condition violated; inspect ${paths.runDir}`);
-        return 1;
-      }
-      console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
-      return report.runStatus === "failed" ? 1 : 0;
     } finally {
       release();
     }

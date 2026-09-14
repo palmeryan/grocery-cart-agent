@@ -205,6 +205,26 @@ describe("cart CLI", () => {
     expect(exitCode).toBe(1);
   });
 
+  it("returns 1 for failed report with authenticated false (honest auth failure)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-failed-auth-"));
+    const request = writeValidRequest(root);
+    const exitCode = await runCli(["build", request], {
+      rootDir: root,
+      env: baseEnv(root),
+      invokeCodex: async ({ reportPath, requestSha256 }) => {
+        writeReport(reportPath, requestSha256, {
+          runStatus: "failed",
+          authenticated: false,
+          expectedLocationConfirmed: false,
+          wholeFoodsStorefrontConfirmed: false,
+          failureReason: "not authenticated at Whole Foods",
+        });
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(1);
+  });
+
   it.each([
     ["checkoutVisited", { checkoutVisited: true }],
     ["settingsChanged", { settingsChanged: true }],
@@ -296,6 +316,35 @@ describe("cart CLI", () => {
         env: baseEnv(root),
         invokeCodex: async ({ reportPath, requestSha256 }) => {
           writeReport(reportPath, requestSha256);
+          return { exitCode: 0, signal: null, timedOut: false };
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it("chmods report.json when invoke rejects after writing a report", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-perm-reject-"));
+    const request = writeValidRequest(root);
+    let reportPath = "";
+    const exitCode = await runCli(["build", request], {
+      rootDir: root,
+      env: baseEnv(root),
+      invokeCodex: async ({ reportPath: path, requestSha256 }) => {
+        reportPath = path;
+        writeReport(path, requestSha256, {}, 0o644);
+        expect(modeOf(path)).toBe(0o644);
+        throw new Error("invoke rejected after writing report");
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(modeOf(reportPath)).toBe(0o600);
+    // Lock released for a subsequent run.
+    expect(
+      await runCli(["build", request], {
+        rootDir: root,
+        env: baseEnv(root),
+        invokeCodex: async ({ reportPath: path, requestSha256 }) => {
+          writeReport(path, requestSha256);
           return { exitCode: 0, signal: null, timedOut: false };
         },
       }),
