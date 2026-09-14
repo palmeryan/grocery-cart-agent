@@ -1,40 +1,40 @@
 # Whole Foods Cart Builder POC
 
-Local feasibility harness using ChatGPT-authenticated Codex CLI and Microsoft
-Playwright MCP. This repository records earlier **negative / incomplete**
-dedicated-profile results and now documents the attached-browser authentication
-path for further offline and supervised experiments. It is not a proven cart
-builder.
+Local feasibility harness using the Codex CLI and Microsoft Playwright MCP to
+turn recipe JSON into a Whole Foods delivery cart. This repository records
+earlier incomplete dedicated-profile results and the current attached-browser
+workflow. The first successful end-to-end cart run is still outstanding.
 
 ## Current outcome
 
-The earlier dedicated-profile live smoke **failed** because Amazon
-authentication did not persist into Playwright MCP after a clean manual
-sign-in. Cart-matching acceptance runs (staples / ambiguous / substitutions,
-controlled rerun, later-day persistence) were **not performed**.
+The earlier dedicated-profile live smoke failed because Amazon authentication
+did not persist into Playwright MCP after a clean manual sign-in. Cart-matching
+acceptance runs (staples / ambiguous / substitutions, controlled rerun,
+later-day persistence) were not performed.
 
-This branch documents and implements attachment through a CLI-owned dedicated
-Chrome profile plus the official Playwright MCP Browser Extension. Operators
-must complete the staged gates in `docs/manual-test-runbook.md` before any live
-Amazon or cart action. Treat the commands below as the harness entrypoint, not
-as a verified end-to-end cart builder.
+The CLI owns a dedicated Chrome profile and attaches through the official
+Playwright MCP Browser Extension. The account's saved default address is the
+delivery context; Lamar is the intended Whole Foods store. Treat the commands
+below as the harness entrypoint until a live end-to-end run succeeds.
 
-## Safety warning
+## Operating limits
 
-This POC gives Codex generic control of a browser that may be signed into a
-funded Amazon account. Checkout prevention is prompt-only, not a hard security
-boundary. Watch any live run. Stop the process immediately (`Ctrl-C`) if it
-enters checkout or changes account settings.
+The agent is instructed to build a delivery cart, preserve unrelated items, and
+stop before checkout or order submission. These are prompt instructions, not a
+browser-enforced checkout block. Supervise the first end-to-end run and use
+`Ctrl-C` if needed.
 
-Never export cookies or Playwright storage state. Never use the everyday Chrome
-profile for this POC. Sensitive output under `runs/` must never be committed or
-uploaded.
+Use the dedicated test profile. Local output in `runs/` is gitignored and may
+contain account information and connection tokens; keep it local.
 
 ## Prerequisites
 
 - macOS with Google Chrome
 - Node.js 22.16.0 or newer
 - Codex CLI 0.154.0 or newer, signed into the intended ChatGPT account
+
+The cart runner explicitly uses the Codex `gpt-5.6-terra` model with medium
+reasoning effort.
 
 All harness commands below run from the repository root.
 
@@ -53,32 +53,25 @@ The cart command launches and owns a dedicated normal Chrome instance at
 `~/.whole-foods-cart/chrome-profile`. It never attaches to the everyday Chrome
 profile.
 
-Set the documentation/offline postal value in the local shell before any
-attachment-check, auth-check, or build command. `00000` is documentation and
-offline only; it is not a live delivery location.
-
-```bash
-export WFM_EXPECTED_POSTAL_CODE=00000
-```
-
 1. Run `npm run login`.
 2. In that dedicated Chrome profile, install Microsoft's official Playwright
    MCP Browser Extension.
-3. Sign in to Amazon and select the intended Whole Foods delivery location.
+3. Sign in to Amazon and confirm the account's saved default address is the
+   intended Whole Foods delivery address, with Lamar as the store context.
 4. Copy the extension token, then run `npm run setup-extension-token`. Paste
    the token only into the hidden macOS Keychain prompt.
 5. Close the dedicated Chrome window.
 6. Run `npm run cart -- attachment-check` to verify the extension against
    Example Domain without opening Amazon.
-7. Before `auth-check` or any cart build, set the real expected postal code in
-   the local shell only. Do not write that value to Git, Keychain, logs, or
-   docs, and do not paste a real postal code into committed files.
-8. Run `npm run auth-check`.
-9. After the auth check succeeds, run
+7. Run `npm run auth-check`.
+8. After the auth check succeeds, run
    `npm run cart -- build path/to/request.json`.
 
 The CLI starts Chrome on demand and closes only the instance it launched.
-Codex receives neither the extension token nor the Keychain lookup command.
+The extension token is retrieved by the local shim from Keychain and is not
+passed in the recipe prompt or command arguments. Browser-tool connection
+details can still appear in tool output and saved run artifacts; treat those
+outputs as sensitive and do not commit or upload them.
 
 ### Recovery lock
 
@@ -99,10 +92,8 @@ the repository root only:
 rm .wfm-cart.lock
 ```
 
-## Manual gates
+## Manual verification
 
-Run the staged acceptance sequence in `docs/manual-test-runbook.md` in order
-from the repository root. Attachment-check comes before auth-check. Obtain
-explicit operator approval before any live Amazon read and before any cart
-mutation. Do not remove a recovery lock until the repository-root inspect step
-shows no Chrome process on the dedicated profile.
+Use `docs/manual-test-runbook.md` for the short live verification sequence.
+Do not remove a recovery lock until the repository-root inspect step shows no
+Chrome process on the dedicated profile.

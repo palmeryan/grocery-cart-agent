@@ -7,13 +7,21 @@
     "url",
     "title",
     "navigationPerformed",
-    "interactionPerformed"
+    "interactionPerformed",
+    "failureReason"
   ],
   "properties": {
-    "connected": { "const": true },
-    "url": { "const": "https://example.com/" },
-    "title": { "const": "Example Domain" },
+    "connected": { "type": "boolean" },
+    "url": {
+      "type": ["string", "null"],
+      "enum": ["https://example.com/", null]
+    },
+    "title": {
+      "type": ["string", "null"],
+      "enum": ["Example Domain", null]
+    },
     "navigationPerformed": { "type": "boolean" },
-    "interactionPerformed": { "type": "boolean" }
+    "interactionPerformed": { "type": "boolean" },
+    "failureReason": { "type": ["string", "null"] }
   }
 }

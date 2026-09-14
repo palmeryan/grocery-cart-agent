@@ -6,7 +6,8 @@
     "runStatus",
     "requestSha256",
     "authenticated",
-    "expectedLocationConfirmed",
+    "deliveryModeConfirmed",
+    "deliveryAddressConfirmed",
     "wholeFoodsStorefrontConfirmed",
     "checkoutVisited",
     "settingsChanged",
@@ -18,10 +19,14 @@
     "failureReason"
   ],
   "properties": {
-    "runStatus": { "enum": ["completed", "partial", "failed"] },
+    "runStatus": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed"]
+    },
     "requestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "authenticated": { "type": "boolean" },
-    "expectedLocationConfirmed": { "type": "boolean" },
+    "deliveryModeConfirmed": { "type": "boolean" },
+    "deliveryAddressConfirmed": { "type": "boolean" },
     "wholeFoodsStorefrontConfirmed": { "type": "boolean" },
     "checkoutVisited": { "type": "boolean" },
     "settingsChanged": { "type": "boolean" },
@@ -70,13 +75,19 @@
         "properties": {
           "ingredientId": { "type": "string", "minLength": 1 },
           "requested": { "type": "string", "minLength": 1 },
-          "status": { "enum": ["added", "already_present", "skipped"] },
+          "status": {
+            "type": "string",
+            "enum": ["added", "already_present", "skipped"]
+          },
           "productName": { "type": ["string", "null"] },
           "packageSize": { "type": ["string", "null"] },
           "quantity": { "type": "integer", "minimum": 0 },
           "price": { "type": ["string", "null"] },
           "rationale": { "type": "string", "minLength": 1 },
-          "confidence": { "enum": ["high", "medium", "low"] }
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          }
         }
       }
     },

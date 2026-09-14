@@ -64,18 +64,17 @@ describe("artifact paths", () => {
 });
 
 describe("configuration", () => {
-  it("uses a profile outside the repository and requires a postal code", () => {
+  it("uses a profile outside the repository and defaults to delivery", () => {
     const config = loadConfig(
       {
         HOME: "/Users/test",
-        WFM_EXPECTED_POSTAL_CODE: "02139",
       },
       "/repo",
     );
     expect(config.profileDir).toBe(
       "/Users/test/.whole-foods-cart/chrome-profile",
     );
-    expect(config.expectedPostalCode).toBe("02139");
+    expect(config.deliveryMode).toBe("delivery");
     expect(sha256("same")).toHaveLength(64);
   });
 
@@ -84,7 +83,6 @@ describe("configuration", () => {
       {
         HOME: "/Users/test",
         USER: "test",
-        WFM_EXPECTED_POSTAL_CODE: "00000",
       },
       "/repo",
     );

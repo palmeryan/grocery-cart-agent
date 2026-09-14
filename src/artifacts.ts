@@ -92,12 +92,14 @@ export function writeRunMetadata(
   paths: RunPaths,
   requestSource: string,
   requestSha256: string,
+  modelSettings: { model: string; reasoningEffort: string },
 ): void {
   writeFileSync(
     join(paths.runDir, "metadata.json"),
     `${JSON.stringify({
       requestSource: basename(requestSource),
       requestSha256,
+      ...modelSettings,
       createdAt: new Date().toISOString(),
     }, null, 2)}\n`,
     { mode: 0o600 },

@@ -125,7 +125,8 @@ export function assertReportPreflight(report: CartReport): void {
     const missingGates = (
       [
         ["authenticated", report.authenticated],
-        ["expectedLocationConfirmed", report.expectedLocationConfirmed],
+        ["deliveryModeConfirmed", report.deliveryModeConfirmed],
+        ["deliveryAddressConfirmed", report.deliveryAddressConfirmed],
         ["wholeFoodsStorefrontConfirmed", report.wholeFoodsStorefrontConfirmed],
       ] as const
     )
@@ -161,11 +162,15 @@ export function parseAttachmentReport(text: string): AttachmentReport {
 export function assertAttachmentReportSafe(
   report: AttachmentReport,
 ): void {
-  if (report.navigationPerformed || report.interactionPerformed) {
+  if (report.interactionPerformed) {
     throw new Error("Attachment check performed a prohibited action");
   }
+  if (!report.connected) {
+    throw new Error(
+      `Attachment check failed${report.failureReason ? `: ${report.failureReason}` : ""}`,
+    );
+  }
   if (
-    !report.connected ||
     report.url !== "https://example.com/" ||
     report.title !== "Example Domain"
   ) {
@@ -188,7 +193,8 @@ export function assertAuthReportSafe(report: AuthReport): void {
   const missing = (
     [
       ["authenticated", report.authenticated],
-      ["expectedLocationConfirmed", report.expectedLocationConfirmed],
+      ["deliveryModeConfirmed", report.deliveryModeConfirmed],
+      ["deliveryAddressConfirmed", report.deliveryAddressConfirmed],
       [
         "wholeFoodsStorefrontConfirmed",
         report.wholeFoodsStorefrontConfirmed,
@@ -198,8 +204,13 @@ export function assertAuthReportSafe(report: AuthReport): void {
     .filter(([, value]) => !value)
     .map(([name]) => name);
   if (report.runStatus !== "completed" || missing.length > 0) {
+    const reason = report.failureReason
+      ? `: ${report.failureReason}`
+      : missing.length > 0
+        ? `: ${missing.join(", ")}`
+        : "";
     throw new Error(
-      `Auth check failed${missing.length > 0 ? `: ${missing.join(", ")}` : ""}`,
+      `Auth check failed${reason}`,
     );
   }
 }

@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CART_MODEL,
+  CART_REASONING_EFFORT,
   buildCodexInvocation,
   createKillEscalation,
   runCodex,
@@ -32,8 +34,14 @@ describe("Codex invocation", () => {
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
       playwrightMcpShim: "/repo/scripts/playwright-extension-mcp.sh",
+      profileDir: "/home/test/.whole-foods-cart/chrome-profile",
     });
     const joined = invocation.args.join(" ");
+    expect(invocation.args).toContain("--model");
+    expect(invocation.args).toContain(CART_MODEL);
+    expect(invocation.args).toContain(
+      `model_reasoning_effort="${CART_REASONING_EFFORT}"`,
+    );
     expect(invocation.args).toContain("--sandbox");
     expect(invocation.args).toContain("read-only");
     expect(invocation.args).toContain("--ignore-user-config");
@@ -52,7 +60,7 @@ describe("Codex invocation", () => {
       'mcp_servers.playwright.command="/repo/scripts/playwright-extension-mcp.sh"',
     );
     expect(joined).toContain(
-      'mcp_servers.playwright.args=["/repo/node_modules/.bin/playwright-mcp","/repo/runs/id/browser"]',
+      'mcp_servers.playwright.args=["/repo/node_modules/.bin/playwright-mcp","/repo/runs/id/browser","/home/test/.whole-foods-cart/chrome-profile"]',
     );
     expect(joined).not.toContain("--browser=chrome");
     expect(joined).not.toContain("--user-data-dir");
@@ -70,6 +78,7 @@ describe("Codex invocation", () => {
       schemaPath: "/repo/schemas/report.schema.json",
       playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
       playwrightMcpShim: "/repo/scripts/playwright-extension-mcp.sh",
+      profileDir: "/home/test/.whole-foods-cart/chrome-profile",
     });
     expect(invocation.args.at(-1)).toBe("-");
   });

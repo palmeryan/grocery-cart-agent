@@ -24,11 +24,11 @@ describe("cart prompt", () => {
     const prompt = renderPrompt({
       request,
       requestSha256: "b".repeat(64),
-      expectedPostalCode: "02139",
+      deliveryMode: "delivery",
       previousReport: null,
       browserOutputDir: "/repo/runs/id/browser",
     });
-    expect(prompt).toContain("02139");
+    expect(prompt).toContain("DELIVERY MODE: delivery");
     expect(prompt).toContain("Chicken stir-fry");
     expect(prompt).toContain("b".repeat(64));
   });
@@ -37,22 +37,26 @@ describe("cart prompt", () => {
     const prompt = renderPrompt({
       request,
       requestSha256: "b".repeat(64),
-      expectedPostalCode: "02139",
+      deliveryMode: "delivery",
       previousReport: prior,
       browserOutputDir: "/repo/runs/id/browser",
     });
     expect(prompt).toContain("NEVER open or enter checkout");
-    expect(prompt).toContain("Do not change an address or payment setting");
-    expect(prompt).toContain("Stop immediately");
+    expect(prompt).toContain("Do not change the saved address or payment setting");
+    expect(prompt).toContain("report failure when the delivery context");
+    expect(prompt).toContain("Use the current controlled page");
+    expect(prompt).toContain("Do not create tabs");
+    expect(prompt).toMatch(/Do not\s+click the location control/);
+    expect(prompt).toContain("If 43214 appears anywhere in the page");
     expect(prompt).toContain("PREVIOUS REPORT FOR CONTROLLED RERUN");
   });
 
-  it("requires the final screenshot under the absolute browser output directory", () => {
+  it("provides an absolute output path for optional final screenshots", () => {
     const browserOutputDir = "/repo/runs/abc123/browser";
     const prompt = renderPrompt({
       request,
       requestSha256: "b".repeat(64),
-      expectedPostalCode: "02139",
+      deliveryMode: "delivery",
       previousReport: null,
       browserOutputDir,
     });
@@ -72,27 +76,33 @@ describe("cart prompt", () => {
 describe("auth-only prompt", () => {
   it("allows only non-mutating auth and storefront checks", () => {
     const prompt = renderAuthPrompt({
-      expectedPostalCode: "00000",
+      deliveryMode: "delivery",
       browserOutputDir: "/repo/runs/id/browser",
     });
     expect(prompt).toContain("Confirm that Amazon is authenticated");
-    expect(prompt).toContain("00000");
+    expect(prompt).toContain("Use the current controlled page");
+    expect(prompt).toContain("Do not create tabs");
+    expect(prompt).toMatch(/Do\s+not click the location control/);
+    expect(prompt).toContain("If 43214 appears anywhere in the page");
+    expect(prompt).toContain("DELIVERY MODE: delivery");
     expect(prompt).toContain("/repo/runs/id/browser/auth-state.png");
-    expect(prompt).toContain("NEVER inspect cart contents");
-    expect(prompt).toContain("NEVER search for products");
-    expect(prompt).toContain("NEVER add, remove, or change cart items");
+    expect(prompt).toContain("Do not include personal details");
     expect(prompt).toContain("NEVER open or enter checkout");
-    expect(prompt).toContain("NEVER expose an account name");
     expect(prompt).not.toContain("FOR EACH INGREDIENT");
     expect(prompt).not.toContain("GROCERY REQUEST");
   });
 });
 
 describe("harmless attachment prompt", () => {
-  it("permits only observation of Example Domain", () => {
+  it("permits only navigation to and observation of Example Domain", () => {
     const prompt = renderAttachmentPrompt();
     expect(prompt).toContain("https://example.com");
-    expect(prompt).toContain("Do not navigate");
+    expect(prompt).toMatch(
+      /navigate the controlled tab directly to\s+https:\/\/example\.com/,
+    );
+    expect(prompt).toContain("browser_navigate");
+    expect(prompt).toContain("NEVER use browser_run_code_unsafe");
+    expect(prompt).toContain("Do not navigate anywhere else");
     expect(prompt).toContain("Do not click, type, or submit");
     expect(prompt).not.toContain("Amazon");
     expect(prompt).not.toContain("cart");

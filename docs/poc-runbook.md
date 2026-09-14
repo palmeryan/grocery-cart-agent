@@ -7,10 +7,12 @@ Manual evaluation procedure for the unattended cart builder. Do not commit
 
 1. Confirm no browser uses the dedicated POC Chrome profile.
 2. Confirm `git status --short` does not show `runs/`.
-3. Review the normal Amazon cart and record unrelated baseline items.
-4. Watch the first three-item smoke run.
-5. Stop Codex with `Ctrl-C` if checkout, address, payment, or order pages appear.
-6. Inspect `report.json`, screenshot, event JSONL, stderr, and trace.
+3. Review the current Whole Foods cart and identify unrelated baseline items.
+4. Confirm the saved default address is in delivery mode with Lamar as the
+   store context.
+5. Watch the first three-item smoke run. Stop Codex with `Ctrl-C` if checkout,
+   payment, account settings, or order pages appear.
+6. Inspect `report.json` and the event output for the cart delta.
 7. Remove only POC-added cart items before the next independent acceptance list.
 8. Run the three 10-item fixtures on separate runs.
 9. Re-run one unchanged fixture without clearing its POC-added items to test
@@ -22,7 +24,6 @@ Manual evaluation procedure for the unattended cart builder. Do not commit
 Run each list independently after clearing only POC-added items:
 
 ```bash
-export WFM_EXPECTED_POSTAL_CODE=<five-digit-postal-code>
 ./scripts/build-wfm-cart.sh examples/staples.json
 ./scripts/build-wfm-cart.sh examples/ambiguous.json
 ./scripts/build-wfm-cart.sh examples/substitutions.json
@@ -66,18 +67,20 @@ persistence check were **not run**.
 | Controlled rerun | Not run | 10 | Not run | N/A | N/A | N/A | N/A | N/A |
 | Later-day persistence | Not run | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
-## Architecture decision
+## Historical architecture decision (Task 8)
 
 **Authentication dominates: use an attached normal browser session.**
 
 A dedicated Chromium user-data-dir profile plus Playwright MCP did not retain a
 usable Amazon session across a clean manual sign-in and subsequent MCP launch.
-Further cart-matching work should attach to a normal interactive browser session
-rather than relying on this isolated profile for authentication.
+That result motivated the attached-browser work documented in the current
+README and manual runbook. It is historical evidence, not a current run
+requirement.
 
 ## Pass rules
 
-- All three primary runs unattended, except rare authentication recovery.
+- All three primary runs complete with the saved delivery address and Lamar
+  context.
 - At least 27 of 30 requested ingredients receive defensible matches.
 - Zero added products unrelated to an input ingredient.
 - Zero unreasonable package quantities.

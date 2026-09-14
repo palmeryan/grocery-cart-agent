@@ -6,14 +6,14 @@ import type { CartReport, GroceryRequest } from "./types.js";
 export interface PromptInput {
   request: GroceryRequest;
   requestSha256: string;
-  expectedPostalCode: string;
+  deliveryMode: "delivery";
   previousReport: CartReport | null;
   /** Absolute path for Playwright MCP artifacts (screenshots/traces). */
   browserOutputDir: string;
 }
 
 export interface AuthPromptInput {
-  expectedPostalCode: string;
+  deliveryMode: "delivery";
   browserOutputDir: string;
 }
 
@@ -43,7 +43,7 @@ export function renderPrompt(input: PromptInput): string {
   const finalScreenshotPath = `${input.browserOutputDir}/final-state.png`;
   return [
     readFileSync(templatePath, "utf8").trim(),
-    `EXPECTED POSTAL CODE: ${input.expectedPostalCode}`,
+    `DELIVERY MODE: ${input.deliveryMode}`,
     `REQUEST SHA-256: ${input.requestSha256}`,
     // Delimited run config — not grocery request content.
     [
@@ -62,7 +62,7 @@ export function renderAuthPrompt(input: AuthPromptInput): string {
   return [
     authTemplate.trim(),
     "",
-    `EXPECTED POSTAL CODE: ${input.expectedPostalCode}`,
+    `DELIVERY MODE: ${input.deliveryMode}`,
     `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
     `AUTH SCREENSHOT PATH: ${join(input.browserOutputDir, "auth-state.png")}`,
     "",

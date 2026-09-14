@@ -160,10 +160,12 @@ describe("report validation", () => {
 
   it.each([
     ["completed", "authenticated", { authenticated: false }],
-    ["completed", "expectedLocationConfirmed", { expectedLocationConfirmed: false }],
+    ["completed", "deliveryModeConfirmed", { deliveryModeConfirmed: false }],
+    ["completed", "deliveryAddressConfirmed", { deliveryAddressConfirmed: false }],
     ["completed", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
     ["partial", "authenticated", { authenticated: false }],
-    ["partial", "expectedLocationConfirmed", { expectedLocationConfirmed: false }],
+    ["partial", "deliveryModeConfirmed", { deliveryModeConfirmed: false }],
+    ["partial", "deliveryAddressConfirmed", { deliveryAddressConfirmed: false }],
     ["partial", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
   ] as const)(
     "rejects %s preflight when %s is false",
@@ -185,7 +187,8 @@ describe("report validation", () => {
     );
     report.runStatus = "failed";
     report.authenticated = false;
-    report.expectedLocationConfirmed = false;
+    report.deliveryModeConfirmed = false;
+    report.deliveryAddressConfirmed = false;
     report.wholeFoodsStorefrontConfirmed = false;
     report.failureReason = "not authenticated";
     expect(() => assertReportPreflight(report)).not.toThrow();
@@ -234,7 +237,8 @@ describe("auth report validation", () => {
 
   it.each([
     ["authenticated", false],
-    ["expectedLocationConfirmed", false],
+    ["deliveryModeConfirmed", false],
+    ["deliveryAddressConfirmed", false],
     ["wholeFoodsStorefrontConfirmed", false],
     ["checkoutVisited", true],
     ["settingsChanged", true],
@@ -244,6 +248,21 @@ describe("auth report validation", () => {
     expect(() =>
       assertAuthReportSafe(parseAuthReport(JSON.stringify(report))),
     ).toThrow();
+  });
+
+  it("includes the reported failure reason when an auth gate fails", () => {
+    const report = {
+      ...validAuthReport(),
+      runStatus: "failed",
+      authenticated: false,
+      deliveryModeConfirmed: false,
+      deliveryAddressConfirmed: false,
+      wholeFoodsStorefrontConfirmed: false,
+      failureReason: "Playwright Extension was not found",
+    };
+    expect(() =>
+      assertAuthReportSafe(parseAuthReport(JSON.stringify(report))),
+    ).toThrow("Playwright Extension was not found");
   });
 
   it("rejects cart-shaped fields", () => {
@@ -264,7 +283,6 @@ describe("harmless attachment report validation", () => {
   });
 
   it.each([
-    ["connected", false],
     ["url", "https://not-example.com/"],
     ["title", "Wrong Title"],
   ] as const)("parse rejects invalid %s", (field, value) => {
@@ -274,6 +292,7 @@ describe("harmless attachment report validation", () => {
       title: "Example Domain",
       navigationPerformed: false,
       interactionPerformed: false,
+      failureReason: null,
       [field]: value,
     };
     expect(() => parseAttachmentReport(JSON.stringify(report))).toThrow(
@@ -281,19 +300,36 @@ describe("harmless attachment report validation", () => {
     );
   });
 
-  it("rejects navigation evidence via safety gate", () => {
+  it("accepts an honest connection failure and reports its reason", () => {
+    const report = {
+      connected: false,
+      url: null,
+      title: null,
+      navigationPerformed: false,
+      interactionPerformed: false,
+      failureReason: "Playwright Extension was not found",
+    };
+    expect(() =>
+      assertAttachmentReportSafe(
+        parseAttachmentReport(JSON.stringify(report)),
+      ),
+    ).toThrow("Playwright Extension was not found");
+  });
+
+  it("allows navigation evidence after reaching Example Domain", () => {
     const report = {
       connected: true,
       url: "https://example.com/",
       title: "Example Domain",
       navigationPerformed: true,
       interactionPerformed: false,
+      failureReason: null,
     };
     expect(() =>
       assertAttachmentReportSafe(
         parseAttachmentReport(JSON.stringify(report)),
       ),
-    ).toThrow("performed a prohibited action");
+    ).not.toThrow();
   });
 
   it("rejects interaction evidence via safety gate", () => {
@@ -303,6 +339,7 @@ describe("harmless attachment report validation", () => {
       title: "Example Domain",
       navigationPerformed: false,
       interactionPerformed: true,
+      failureReason: null,
     };
     expect(() =>
       assertAttachmentReportSafe(

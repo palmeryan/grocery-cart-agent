@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BrowserLaunchError } from "../src/browser.js";
 import { runCli, withCliSignalHandlers } from "../src/cli.js";
@@ -16,7 +16,6 @@ import type { CodexResult } from "../src/codex.js";
 const baseEnv = (root: string) => ({
   HOME: root,
   USER: "test",
-  WFM_EXPECTED_POSTAL_CODE: "00000",
   PLAYWRIGHT_MCP_BIN: "/usr/bin/true",
   PLAYWRIGHT_MCP_SHIM: "/usr/bin/true",
   CHROME_EXECUTABLE: "/usr/bin/true",
@@ -85,6 +84,13 @@ describe("cart CLI", () => {
       ...lifecycleDependencies(root, events),
       invokeCodex: async ({ reportPath, requestSha256, prompt }) => {
         capturedPrompt = prompt;
+        const metadata = JSON.parse(
+          readFileSync(join(dirname(reportPath), "metadata.json"), "utf8"),
+        );
+        expect(metadata).toMatchObject({
+          model: "gpt-5.6-terra",
+          reasoningEffort: "medium",
+        });
         writeReport(reportPath, requestSha256);
         return { exitCode: 0, signal: null, timedOut: false };
       },
@@ -130,7 +136,8 @@ describe("cart CLI", () => {
 
   it.each([
     ["authenticated", { authenticated: false }],
-    ["expectedLocationConfirmed", { expectedLocationConfirmed: false }],
+    ["deliveryModeConfirmed", { deliveryModeConfirmed: false }],
+    ["deliveryAddressConfirmed", { deliveryAddressConfirmed: false }],
     ["wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
   ] as const)(
     "returns nonzero when report preflight %s is false",
@@ -240,7 +247,8 @@ describe("cart CLI", () => {
         writeReport(reportPath, requestSha256, {
           runStatus: "failed",
           authenticated: false,
-          expectedLocationConfirmed: false,
+          deliveryModeConfirmed: false,
+          deliveryAddressConfirmed: false,
           wholeFoodsStorefrontConfirmed: false,
           failureReason: "not authenticated at Whole Foods",
         });
@@ -689,7 +697,7 @@ describe("cart CLI", () => {
       },
     });
     expect(exitCode).toBe(0);
-    expect(prompt).toContain("NEVER inspect cart contents");
+    expect(prompt).toContain("DELIVERY MODE: delivery");
     expect(prompt).not.toContain("GROCERY REQUEST");
     expect(events).toContain("chrome-stop");
   });
@@ -746,6 +754,31 @@ describe("cart CLI", () => {
     });
     expect(exitCode).toBe(0);
     expect(launchUrl).toBe("https://example.com");
+    expect(events).toContain("chrome-stop");
+  });
+
+  it("returns 1 for an honest attachment failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-attachment-failure-"));
+    const events: string[] = [];
+    const exitCode = await runCli(["attachment-check"], {
+      ...lifecycleDependencies(root, events),
+      invokeCodex: async ({ reportPath }) => {
+        writeFileSync(
+          reportPath,
+          JSON.stringify({
+            connected: false,
+            url: null,
+            title: null,
+            navigationPerformed: false,
+            interactionPerformed: false,
+            failureReason: "Playwright Extension was not found",
+          }),
+          { mode: 0o600 },
+        );
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    expect(exitCode).toBe(1);
     expect(events).toContain("chrome-stop");
   });
 });

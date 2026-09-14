@@ -59,8 +59,10 @@ describe("extension MCP shim", () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-shim-"));
     const bin = join(root, "fake-mcp");
     const outputDir = join(root, "browser");
+    const profileDir = join(root, "chrome-profile");
     const security = join(root, "security");
     mkdirSync(outputDir);
+    mkdirSync(profileDir);
     writeFileSync(
       security,
       "#!/bin/sh\nprintf '%s\\n' 'secret-token'\n",
@@ -73,14 +75,15 @@ describe("extension MCP shim", () => {
     );
     const shim = join(process.cwd(), "scripts/playwright-extension-mcp.sh");
     chmodSync(shim, 0o700);
-    const output = execFileSync(shim, [bin, outputDir], {
+    const output = execFileSync(shim, [bin, outputDir, profileDir], {
       env: { ...process.env, PATH: `${root}:/usr/bin:/bin`, USER: "ryan" },
       encoding: "utf8",
     });
     expect(output).toContain("TOKEN_SET=yes");
-    expect(output).toContain(`ARGS=--extension --output-dir=${outputDir} --caps=devtools`);
+    expect(output).toContain(
+      `ARGS=--extension --user-data-dir=${profileDir} --output-dir=${outputDir} --caps=devtools`,
+    );
     expect(output).not.toContain("secret-token");
-    expect(output).not.toContain("--user-data-dir");
     expect(output).not.toContain("--cdp-endpoint");
     expect(output).not.toContain("--storage-state");
   });

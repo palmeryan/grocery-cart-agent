@@ -5,7 +5,8 @@ export interface AppConfig {
   rootDir: string;
   runsDir: string;
   profileDir: string;
-  expectedPostalCode: string;
+  /** The storefront mode this harness is intended to use. */
+  deliveryMode: "delivery";
   maxRunMs: number;
   codexBin: string;
   playwrightMcpBin: string;
@@ -33,11 +34,6 @@ export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   rootDir = process.cwd(),
 ): AppConfig {
-  const expectedPostalCode = env.WFM_EXPECTED_POSTAL_CODE?.trim();
-  if (!expectedPostalCode || !/^[0-9]{5}$/.test(expectedPostalCode)) {
-    throw new Error("WFM_EXPECTED_POSTAL_CODE must be a five-digit US postal code");
-  }
-
   const home = env.HOME ?? homedir();
   const profileDir = env.WFM_CHROME_PROFILE_DIR
     ? resolve(env.WFM_CHROME_PROFILE_DIR)
@@ -56,7 +52,7 @@ export function loadConfig(
     rootDir: absoluteRoot,
     runsDir: join(absoluteRoot, "runs"),
     profileDir,
-    expectedPostalCode,
+    deliveryMode: "delivery",
     maxRunMs,
     codexBin: env.CODEX_BIN ?? "codex",
     playwrightMcpBin: env.PLAYWRIGHT_MCP_BIN ?? join(
