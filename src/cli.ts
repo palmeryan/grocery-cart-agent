@@ -163,7 +163,64 @@ export async function runCli(
   let retainLock = false;
   let cleanupFailed = false;
   let invocationAttempted = false;
+  let cleanupPromise: Promise<number> | undefined;
   const lockPath = join(rootDir, ".wfm-cart.lock");
+
+  /** Single-entry cleanup: concurrent/repeated calls share one promise. */
+  const finish = (): Promise<number> => {
+    if (!cleanupPromise) {
+      cleanupPromise = runCleanup();
+    }
+    return cleanupPromise;
+  };
+
+  async function runCleanup(): Promise<number> {
+    // Codex/invoke must have settled (or never started) before browser stop.
+    if (lockAcquired && lock) {
+      const heldLock = lock;
+      try {
+        if (invocationAttempted && paths) {
+          try {
+            secure(paths.reportPath);
+          } catch (error) {
+            cleanupFailed = true;
+            console.error(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+        if (browser) {
+          try {
+            const stopped = await browser.stop();
+            if (!stopped.stopped) {
+              retainLock = true;
+              cleanupFailed = true;
+              console.error(
+                `Chrome still uses the dedicated profile (PIDs: ${stopped.remainingProfilePids.join(", ")}). Confirm those processes are gone, then manually remove ${lockPath}.`,
+              );
+            }
+          } catch (error) {
+            // Thrown stop => uncertain browser state: never release the lock.
+            retainLock = true;
+            cleanupFailed = true;
+            console.error(
+              error instanceof Error
+                ? `Chrome stop failed: ${error.message}. Confirm dedicated-profile Chrome is gone, then manually remove ${lockPath}.`
+                : `Chrome stop failed. Confirm dedicated-profile Chrome is gone, then manually remove ${lockPath}.`,
+            );
+          }
+        }
+      } finally {
+        if (!retainLock) {
+          releaseLock(heldLock);
+        } else {
+          heldLock.retain();
+        }
+      }
+      if (cleanupFailed) exitCode = 2;
+    }
+    return exitCode;
+  }
 
   try {
     const config = loadConfig(dependencies.env ?? process.env, rootDir);
@@ -214,7 +271,7 @@ export async function runCli(
       }
       console.error(error instanceof Error ? error.message : String(error));
       exitCode = 2;
-      // Fall through to cleanup finally; do not run Codex.
+      // Fall through to cleanup; do not run Codex.
       return await finish();
     }
 
@@ -337,42 +394,6 @@ export async function runCli(
     console.error(error instanceof Error ? error.message : String(error));
     exitCode = 2;
     return await finish();
-  }
-
-  async function finish(): Promise<number> {
-    // Codex/invoke must have settled (or never started) before browser stop.
-    if (lockAcquired && lock) {
-      try {
-        if (invocationAttempted && paths) {
-          try {
-            secure(paths.reportPath);
-          } catch (error) {
-            cleanupFailed = true;
-            console.error(
-              error instanceof Error ? error.message : String(error),
-            );
-          }
-        }
-        if (browser) {
-          const stopped = await browser.stop();
-          if (!stopped.stopped) {
-            retainLock = true;
-            cleanupFailed = true;
-            console.error(
-              `Chrome still uses the dedicated profile (PIDs: ${stopped.remainingProfilePids.join(", ")}). Confirm those processes are gone, then manually remove ${lockPath}.`,
-            );
-          }
-        }
-      } finally {
-        if (!retainLock) {
-          releaseLock(lock);
-        } else {
-          lock.retain();
-        }
-      }
-      if (cleanupFailed) exitCode = 2;
-    }
-    return exitCode;
   }
 }
 

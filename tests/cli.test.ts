@@ -544,6 +544,50 @@ describe("cart CLI", () => {
     expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
   });
 
+  it("retains the lock when browser.stop rejects and never calls releaseLock", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-stop-reject-"));
+    const request = writeValidRequest(root);
+    const lockPath = join(root, ".wfm-cart.lock");
+    const events: string[] = [];
+    let stopCalls = 0;
+    let releaseCalls = 0;
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      launchBrowser: async () => {
+        events.push("chrome-start");
+        return {
+          pid: 4242,
+          stop: async () => {
+            stopCalls += 1;
+            events.push("chrome-stop");
+            throw new Error("stop transport failed");
+          },
+        };
+      },
+      releaseLock: () => {
+        releaseCalls += 1;
+        events.push("lock-release");
+      },
+      invokeCodex: async ({ reportPath, requestSha256 }) => {
+        events.push("codex");
+        writeReport(reportPath, requestSha256);
+        return { exitCode: 0, signal: null, timedOut: false };
+      },
+    });
+    // Successful Codex/report must not bypass stop-failure retention policy.
+    expect(exitCode).toBe(2);
+    expect(stopCalls).toBe(1);
+    expect(releaseCalls).toBe(0);
+    expect(events).toEqual([
+      "token-check",
+      "chrome-start",
+      "codex",
+      "chrome-stop",
+    ]);
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, "utf8")).toMatch(/^\d+\n$/);
+  });
+
   it("releases the lock when BrowserLaunchError does not require retention", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-launch-release-"));
     const request = writeValidRequest(root);
