@@ -228,10 +228,12 @@ describe("Codex process", () => {
         return aborted;
       },
       addEventListener(
-        _type: string,
+        type: string,
         handler: () => void,
-        _options?: { once?: boolean },
+        options?: { once?: boolean },
       ) {
+        void type;
+        void options;
         listener = handler;
         // Abort races in right after subscription registration.
         aborted = true;
@@ -240,7 +242,9 @@ describe("Codex process", () => {
           handler();
         });
       },
-      removeEventListener(_type: string, _handler: () => void) {
+      removeEventListener(type: string, handler: () => void) {
+        void type;
+        void handler;
         listener = undefined;
       },
     } as unknown as AbortSignal;
