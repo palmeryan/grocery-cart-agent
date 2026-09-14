@@ -60,3 +60,13 @@ export interface RunPaths {
   stderrPath: string;
   browserOutputDir: string;
 }
+
+export interface BrowserStopResult {
+  stopped: boolean;
+  remainingProfilePids: number[];
+}
+
+export interface OwnedChromeSession {
+  pid: number;
+  stop(): Promise<BrowserStopResult>;
+}
