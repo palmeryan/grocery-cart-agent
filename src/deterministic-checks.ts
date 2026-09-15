@@ -2,7 +2,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import type { AttachmentReport, AuthReport, OwnedChromeSession } from "./types.js";
 const WHOLE_FOODS_HOST="www.wholefoodsmarket.com", EXAMPLE_URL="https://example.com/", EXAMPLE_TITLE="Example Domain", CDP_CONNECT_TIMEOUT_MS=15_000, CDP_RETRY_MS=250;
 const expectedPage=async(browser:Browser,expected:(url:string)=>boolean):Promise<Page>=>{const context=browser.contexts()[0];if(!context)throw new Error("Chrome exposed no browser context");const page=context.pages().find((candidate)=>expected(candidate.url()));if(!page)throw new Error("Chrome exposed no browser page");await page.waitForLoadState("domcontentloaded").catch(()=>undefined);return page;};
-const pageText=async(page:Page):Promise<string=>{try{return await page.locator("body").innerText({timeout:10_000});}catch{return "";}};
+const pageText = async (page: Page): Promise<string> => { try { return await page.locator("body").innerText({ timeout: 10_000 }); } catch { return ""; } };
 export const hasDeliveryAddress=(text:string,expectedAddress=process.env.WFM_EXPECTED_DELIVERY_ADDRESS??"",expectedZip=process.env.WFM_EXPECTED_DELIVERY_ZIP??"43214"):boolean=>{const a=expectedAddress.trim();return (a.length>0&&text.toLocaleLowerCase().includes(a.toLocaleLowerCase()))||(expectedZip.trim().length>0&&text.includes(expectedZip.trim()));};
 export const hasDeliveryMode=(text:string):boolean=>/delivery|deliver\s+to|delivery\s+address/i.test(text);
 export const isSignedOutPage=(url:string,text:string):boolean=>/\/(?:ap\/)?signin(?:[/?]|$)/i.test(url)||(!hasDeliveryAddress(text)&&/sign in to your account|enter your password|create your amazon account|log in with amazon|log in to get started/i.test(text));
