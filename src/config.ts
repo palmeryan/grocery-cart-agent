@@ -5,8 +5,9 @@ export interface AppConfig {
   rootDir: string;
   runsDir: string;
   profileDir: string;
-  /** The storefront mode this harness is intended to use. */
   deliveryMode: "delivery";
+  expectedDeliveryAddress: string;
+  expectedDeliveryZip: string;
   maxRunMs: number;
   codexBin: string;
   playwrightMcpBin: string;
@@ -15,61 +16,31 @@ export interface AppConfig {
   chromeStopTimeoutMs: number;
 }
 
-const parsePositiveInt = (
-  value: string | undefined,
-  fallback: number,
-  name: string,
-): number => {
+const parsePositiveInt = (value: string | undefined, fallback: number, name: string): number => {
   const parsed = Number(value ?? fallback);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
 };
 
-export function loadConfig(
-  env: NodeJS.ProcessEnv = process.env,
-  rootDir = process.cwd(),
-): AppConfig {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, rootDir = process.cwd()): AppConfig {
   const home = env.HOME ?? homedir();
-  const profileDir = env.WFM_CHROME_PROFILE_DIR
-    ? resolve(env.WFM_CHROME_PROFILE_DIR)
-    : join(home, ".whole-foods-cart", "chrome-profile");
-  if (!isAbsolute(profileDir)) {
-    throw new Error("WFM_CHROME_PROFILE_DIR must resolve to an absolute path");
-  }
-
+  const profileDir = env.WFM_CHROME_PROFILE_DIR ? resolve(env.WFM_CHROME_PROFILE_DIR) : join(home, ".whole-foods-cart", "chrome-profile");
+  if (!isAbsolute(profileDir)) throw new Error("WFM_CHROME_PROFILE_DIR must resolve to an absolute path");
   const maxRunMs = Number(env.WFM_MAX_RUN_MS ?? "1800000");
-  if (!Number.isInteger(maxRunMs) || maxRunMs < 60_000) {
-    throw new Error("WFM_MAX_RUN_MS must be an integer of at least 60000");
-  }
-
+  if (!Number.isInteger(maxRunMs) || maxRunMs < 60_000) throw new Error("WFM_MAX_RUN_MS must be an integer of at least 60000");
   const absoluteRoot = resolve(rootDir);
   return {
     rootDir: absoluteRoot,
     runsDir: join(absoluteRoot, "runs"),
     profileDir,
     deliveryMode: "delivery",
+    expectedDeliveryAddress: env.WFM_EXPECTED_DELIVERY_ADDRESS ?? "Ryan/Lamar saved delivery address",
+    expectedDeliveryZip: env.WFM_EXPECTED_DELIVERY_ZIP ?? "43214",
     maxRunMs,
     codexBin: env.CODEX_BIN ?? "codex",
-    playwrightMcpBin: env.PLAYWRIGHT_MCP_BIN ?? join(
-      absoluteRoot,
-      "node_modules",
-      ".bin",
-      "playwright-mcp",
-    ),
-    chromeExecutable:
-      env.CHROME_EXECUTABLE ??
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    chromeStartupTimeoutMs: parsePositiveInt(
-      env.WFM_CHROME_STARTUP_TIMEOUT_MS,
-      15_000,
-      "WFM_CHROME_STARTUP_TIMEOUT_MS",
-    ),
-    chromeStopTimeoutMs: parsePositiveInt(
-      env.WFM_CHROME_STOP_TIMEOUT_MS,
-      10_000,
-      "WFM_CHROME_STOP_TIMEOUT_MS",
-    ),
+    playwrightMcpBin: env.PLAYWRIGHT_MCP_BIN ?? join(absoluteRoot, "node_modules", ".bin", "playwright-mcp"),
+    chromeExecutable: env.CHROME_EXECUTABLE ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    chromeStartupTimeoutMs: parsePositiveInt(env.WFM_CHROME_STARTUP_TIMEOUT_MS, 15_000, "WFM_CHROME_STARTUP_TIMEOUT_MS"),
+    chromeStopTimeoutMs: parsePositiveInt(env.WFM_CHROME_STOP_TIMEOUT_MS, 10_000, "WFM_CHROME_STOP_TIMEOUT_MS"),
   };
 }
