@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+  CartAgentResult,
   CartItemSnapshot,
   CartReport,
   GroceryRequest,
-  IngredientResult,
 } from "./types.js";
-import type { IngredientTask } from "./ingredient-runner.js";
+import type { CartAgentTask } from "./cart-agent.js";
 import type { MealPlanDraft } from "./meal-plan.js";
 
 export interface PromptInput {
@@ -24,17 +24,17 @@ export interface AuthPromptInput {
   browserOutputDir: string;
 }
 
-export interface IngredientPromptInput {
-  task: IngredientTask;
+export interface CartAgentPromptInput {
+  task: CartAgentTask;
   deliveryMode: "delivery";
   cartContext: {
     baselineItems: readonly CartItemSnapshot[];
-    priorResults: readonly IngredientResult[];
+    priorResults: readonly CartAgentResult[];
   };
   browserOutputDir: string;
 }
 
-export interface MealPlanCompilerPromptInput {
+export interface IngredientsAgentPromptInput {
   recipeDocuments: readonly {
     sourceName: string;
     text: string;
@@ -55,13 +55,13 @@ const attachmentTemplate = readFileSync(
   "utf8",
 );
 
-const ingredientTemplate = readFileSync(
-  fileURLToPath(new URL("../prompts/ingredient-agent.md", import.meta.url)),
+const cartAgentTemplate = readFileSync(
+  fileURLToPath(new URL("../prompts/cart-agent.md", import.meta.url)),
   "utf8",
 );
 
-const mealPlanCompilerTemplate = readFileSync(
-  fileURLToPath(new URL("../prompts/meal-plan-compiler.md", import.meta.url)),
+const ingredientsAgentTemplate = readFileSync(
+  fileURLToPath(new URL("../prompts/ingredients-agent.md", import.meta.url)),
   "utf8",
 );
 
@@ -79,7 +79,6 @@ export function renderPrompt(input: PromptInput): string {
     readFileSync(templatePath, "utf8").trim(),
     `DELIVERY MODE: ${input.deliveryMode}`,
     `REQUEST SHA-256: ${input.requestSha256}`,
-    // Delimited run config — not grocery request content.
     [
       `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
       `FINAL SCREENSHOT PATH: ${finalScreenshotPath}`,
@@ -92,22 +91,20 @@ export function renderPrompt(input: PromptInput): string {
   ].join("\n\n");
 }
 
-export function renderIngredientPrompt(
-  input: IngredientPromptInput,
-): string {
+export function renderCartAgentPrompt(input: CartAgentPromptInput): string {
   return [
-    ingredientTemplate.trim(),
+    cartAgentTemplate.trim(),
     `DELIVERY MODE: ${input.deliveryMode}`,
     `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
-    "INGREDIENT TASK:",
+    "CART AGENT TASK:",
     JSON.stringify(input.task, null, 2),
     "CART CONTEXT:",
     JSON.stringify(input.cartContext, null, 2),
   ].join("\n\n");
 }
 
-export function renderMealPlanCompilerPrompt(
-  input: MealPlanCompilerPromptInput,
+export function renderIngredientsAgentPrompt(
+  input: IngredientsAgentPromptInput,
 ): string {
   const documents = input.recipeDocuments.map(({ sourceName, text }) =>
     [
@@ -117,11 +114,22 @@ export function renderMealPlanCompilerPrompt(
       "END RECIPE SOURCE",
     ].join("\n"),
   );
-  return [mealPlanCompilerTemplate.trim(), ...documents].join("\n\n");
+  return [ingredientsAgentTemplate.trim(), ...documents].join("\n\n");
 }
 
-/** Compile-time-only assertion for callers that deserialize planner output. */
-export type MealPlanCompilerOutput = MealPlanDraft;
+/** Compile-time-only assertion for callers that deserialize Ingredients Agent output. */
+export type IngredientsAgentOutput = MealPlanDraft;
+
+/** @deprecated Use CartAgentPromptInput and renderCartAgentPrompt. */
+export type IngredientPromptInput = CartAgentPromptInput;
+/** @deprecated Use IngredientsAgentPromptInput and renderIngredientsAgentPrompt. */
+export type MealPlanCompilerPromptInput = IngredientsAgentPromptInput;
+/** @deprecated Use renderCartAgentPrompt. */
+export const renderIngredientPrompt = renderCartAgentPrompt;
+/** @deprecated Use renderIngredientsAgentPrompt. */
+export const renderMealPlanCompilerPrompt = renderIngredientsAgentPrompt;
+/** @deprecated Use IngredientsAgentOutput. */
+export type MealPlanCompilerOutput = IngredientsAgentOutput;
 
 export function renderAuthPrompt(input: AuthPromptInput): string {
   return [

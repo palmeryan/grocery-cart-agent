@@ -119,14 +119,12 @@ export interface ShoppingPlan {
 
 export type SelectionStatus = "added" | "already_present" | "skipped";
 
-export type IngredientResultStatus =
-  | SelectionStatus
-  | "failed";
+export type CartAgentResultStatus = SelectionStatus | "failed";
 
-export interface IngredientResult {
+export interface CartAgentResult {
   ingredientId: string;
   requested: string;
-  status: IngredientResultStatus;
+  status: CartAgentResultStatus;
   productName: string | null;
   packageSize: string | null;
   quantity: number;
@@ -135,6 +133,11 @@ export interface IngredientResult {
   confidence: "high" | "medium" | "low";
   failureReason: string | null;
 }
+
+/** @deprecated Use CartAgentResultStatus. */
+export type IngredientResultStatus = CartAgentResultStatus;
+/** @deprecated Use CartAgentResult. */
+export type IngredientResult = CartAgentResult;
 
 export interface CartSelection {
   ingredientId: string;

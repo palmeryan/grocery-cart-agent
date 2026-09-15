@@ -59,7 +59,7 @@ describe("report builder", () => {
       requestSha256: "a".repeat(64),
       preflight,
       baseline: inspection("Your cart is empty"),
-      final: inspection("Organic Apples\nCurrent quantity: 1"),
+      final: inspection("Organic Apples\\nCurrent quantity: 1"),
       results: [item()],
     });
     expect(report.runStatus).toBe("completed");
@@ -69,7 +69,7 @@ describe("report builder", () => {
     expect(report.failureReason).toBeNull();
   });
 
-  it("records a final verification mismatch as an output note without retrying", () => {
+  it("fails closed when final verification does not match the Cart Agent result", () => {
     const report = buildCartReport({
       request,
       requestSha256: "a".repeat(64),
@@ -78,10 +78,27 @@ describe("report builder", () => {
       final: inspection("Your cart is empty"),
       results: [item()],
     });
-    expect(report.runStatus).toBe("completed");
-    expect(report.failureReason).toBeNull();
+    expect(report.runStatus).toBe("failed");
+    expect(report.failureReason).toContain("Final cart verification");
     expect(report.verificationNotes?.[0]).toContain("Final cart verification");
     expect(report.selections[0]?.status).toBe("added");
+  });
+
+  it("fails closed when either cart extraction is degraded", () => {
+    const report = buildCartReport({
+      request,
+      requestSha256: "a".repeat(64),
+      preflight,
+      baseline: {
+        ...inspection("Your cart is empty"),
+        extractionStatus: "degraded",
+        extractionDiagnostic: "selectors no longer matched",
+      },
+      final: inspection("Organic Apples\nCurrent quantity: 1"),
+      results: [item()],
+    });
+    expect(report.runStatus).toBe("failed");
+    expect(report.failureReason).toContain("baseline cart extraction was degraded");
   });
 
   it("fills unvisited ingredients with explicit failed results", () => {

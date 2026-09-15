@@ -44,9 +44,10 @@ the same owned Chrome profile and localhost CDP endpoint.
 - Run `npm run auth-check`.
 - Confirm `authenticated`, `deliveryModeConfirmed`,
   `deliveryAddressConfirmed`, and `wholeFoodsStorefrontConfirmed` are true.
-  The deterministic delivery check accepts the saved context when `43214`
-  appears anywhere in the page text. It does not open the location picker or
-  start a separate postal-code workflow.
+  The deterministic delivery check independently confirms delivery mode and the
+  configured visible address fragment. It defaults to `43214`; set
+  `WFM_EXPECTED_DELIVERY_ADDRESS` when validating another address. It does not
+  open the location picker or start a separate postal-code workflow.
 - Confirm `checkoutVisited` and `settingsChanged` are false.
 
 ### Supervised per-ingredient smoke
@@ -63,12 +64,12 @@ npm run cart -- build runs/three-item-smoke.json
 - Stop immediately on checkout, payment, order, or account-setting pages. If
   the delivery context changes or cannot be established, stop the build and
   return a failed report.
-- Confirm the run created one ingredient-agent result per requested ingredient.
-  The browser session should remain the same while the agent contexts change.
+- Confirm the run created one Cart Agent result per requested ingredient. The
+  browser session should remain the same while each Cart Agent context is fresh.
 - Confirm the final deterministic cart-text check records the expected
   product-name/quantity evidence and that the current cart delta matches. Any
-  mismatch is reported under `verificationNotes`; it does not trigger a retry
-  or rewrite the agent's selection.
+  mismatch is reported under `verificationNotes` and fails the run without
+  retrying or rewriting the Cart Agent selection.
 
 ### Larger fixtures
 
