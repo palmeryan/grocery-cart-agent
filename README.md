@@ -1,9 +1,17 @@
 # Whole Foods Cart Builder
 
-Local cart runner using the Codex CLI and Microsoft Playwright MCP to
-turn recipe JSON into a Whole Foods delivery cart. This repository records
-earlier incomplete dedicated-profile results and the current attached-browser
-workflow. The first successful end-to-end cart run is still outstanding.
+Local cart runner using the Codex CLI and Microsoft Playwright MCP to turn
+recipe JSON into a Whole Foods delivery cart. The runner uses one dedicated
+Chrome session and one fresh adaptive agent invocation per ingredient.
+
+The meal-plan compiler is the new boundary for unstructured recipe input. A
+recipe-reading agent extracts source-preserving ingredient facts, consistent
+purchasable identities, and additive quantities. `src/meal-plan.ts` then derives
+opaque intent IDs from source membership, applies pantry and optional policy,
+consolidates matching identities, and produces a versioned shopping plan with
+provenance and a prioritized decision log. The browser layer is not yet switched
+over to this contract; the existing request/report path remains compatible while
+the plan contract is validated against real recipe sources.
 
 ## Current outcome
 
@@ -17,12 +25,16 @@ localhost CDP. The account's saved default address is the delivery context;
 Lamar is the intended Whole Foods store. Treat the commands below as the cart
 entrypoint until a live end-to-end run succeeds.
 
-The build has a deterministic shell and one adaptive browser-agent middle. The
-shell validates the request, owns the Chrome lifecycle and run lock, configures
-Playwright MCP, and validates the final report. A single browser-enabled Codex
-run performs the storefront work: it interprets recipe context, searches,
-chooses products or sensible substitutions, adds items, and verifies the cart.
-There is no separate deterministic candidate-search or product-selection pass.
+The build has a deterministic shell around an adaptive per-ingredient middle.
+The shell validates the request, owns the Chrome lifecycle and run lock,
+configures Playwright MCP, runs preflight, records the baseline cart, invokes
+one browser-enabled agent for each ingredient, and performs one deterministic
+final cart-text verification. Each agent interprets recipe context, searches,
+chooses products or sensible substitutions, and handles the live add flow.
+There is no deterministic candidate-search or product-selection pass.
+If final cart text does not match an agent result, the report records a
+`verificationNotes` entry; it does not retry the ingredient or rewrite the
+agent's selection.
 
 ## Operating limits
 
@@ -40,8 +52,8 @@ contain account information and connection tokens; keep it local.
 - Node.js 22.16.0 or newer
 - Codex CLI 0.154.0 or newer, signed into the intended ChatGPT account
 
-The cart runner explicitly uses the Codex `gpt-5.6-terra` model with medium
-reasoning effort.
+The cart runner explicitly uses the Codex `gpt-5.6-terra` model with low
+reasoning effort for each ingredient agent invocation.
 
 All harness commands below run from the repository root.
 

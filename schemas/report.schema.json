@@ -91,6 +91,10 @@
         }
       }
     },
+    "verificationNotes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "failureReason": { "type": ["string", "null"] }
   }
 }

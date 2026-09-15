@@ -46,7 +46,7 @@ export const isWholeFoodsStorefront = (url: string, text: string): boolean => {
   }
 };
 
-const isWholeFoodsPage = (url: string): boolean => {
+export const isWholeFoodsPage = (url: string): boolean => {
   try {
     return new URL(url).hostname === WHOLE_FOODS_HOST;
   } catch {
