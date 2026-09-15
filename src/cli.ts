@@ -26,11 +26,12 @@ import {
   connectToOwnedChrome,
   isWholeFoodsPage,
   runDeterministicCheck,
+  type DeliveryContextExpectation,
 } from "./deterministic-checks.js";
 import {
   buildCodexInvocation,
-  CART_MODEL,
-  CART_REASONING_EFFORT,
+  CART_AGENT_MODEL,
+  CART_AGENT_REASONING_EFFORT,
   runCodex,
 } from "./codex.js";
 import { loadConfig } from "./config.js";
@@ -40,16 +41,16 @@ import {
   type CartInspectionResult,
 } from "./cart-state.js";
 import {
-  flattenIngredientTasks,
-  runIngredientTasks,
-  type IngredientTask,
-} from "./ingredient-runner.js";
+  flattenCartAgentTasks,
+  runCartAgentTasks,
+  type CartAgentTask,
+} from "./cart-agent.js";
 import { acquireRunLock, type RunLock } from "./lock.js";
-import { renderIngredientPrompt, renderPrompt } from "./prompt.js";
+import { renderCartAgentPrompt, renderPrompt } from "./prompt.js";
 import {
   buildCartReport,
   buildFailedCartReport,
-  completeIngredientResults,
+  completeCartAgentResults,
 } from "./report-builder.js";
 import {
   assertAttachmentReportSafe,
@@ -57,7 +58,7 @@ import {
   assertReportMatchesRequest,
   assertReportPreflight,
   loadRequest,
-  parseIngredientResult,
+  parseCartAgentResult,
   parseAttachmentReport,
   parseAuthReport,
   parseReport,
@@ -66,7 +67,7 @@ import type { CodexResult } from "./codex.js";
 import type {
   AttachmentReport,
   AuthReport,
-  IngredientResult,
+  CartAgentResult,
   OwnedChromeSession,
   RunPaths,
 } from "./types.js";
@@ -82,18 +83,18 @@ type InvokeCodex = (
   signal?: AbortSignal,
 ) => Promise<CodexResult>;
 
-interface InvokeIngredientInput {
-  task: IngredientTask;
-  priorResults: readonly IngredientResult[];
+interface InvokeCartAgentInput {
+  task: CartAgentTask;
+  priorResults: readonly CartAgentResult[];
   attemptDir: string;
   resultPath: string;
   prompt: string;
 }
 
-type InvokeIngredient = (
-  input: InvokeIngredientInput,
+type InvokeCartAgent = (
+  input: InvokeCartAgentInput,
   signal?: AbortSignal,
-) => Promise<IngredientResult>;
+) => Promise<CartAgentResult>;
 
 type CommandKind = RunPaths["kind"];
 
@@ -101,10 +102,13 @@ interface CliDependencies {
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
   invokeCodex?: InvokeCodex;
-  invokeIngredient?: InvokeIngredient;
+  invokeCartAgent?: InvokeCartAgent;
+  /** @deprecated Use invokeCartAgent. */
+  invokeIngredient?: InvokeCartAgent;
   inspectCart?: (
     session: OwnedChromeSession,
   ) => Promise<CartInspectionResult>;
+  prepareCartAgentPage?: (session: OwnedChromeSession) => Promise<void>;
   signal?: AbortSignal;
   secureReport?: (path: string) => void;
   launchBrowser?: (input: LaunchChromeInput) => Promise<OwnedChromeSession>;
@@ -112,6 +116,7 @@ interface CliDependencies {
   runDeterministicCheck?: (
     kind: "auth-check" | "attachment-check",
     session: OwnedChromeSession,
+    expectation?: DeliveryContextExpectation,
   ) => Promise<AuthReport | AttachmentReport>;
   releaseLock?: (lock: RunLock) => void;
 }
@@ -129,7 +134,7 @@ const USAGE = `usage: cart build <request.json>
 const WHOLE_FOODS_URL = "https://www.wholefoodsmarket.com/grocery/search";
 const WHOLE_FOODS_CART_URL = "https://www.wholefoodsmarket.com/grocery/cart";
 const EXAMPLE_URL = "https://example.com";
-const INGREDIENT_SCHEMA_PATH = "schemas/ingredient-result.schema.json";
+const CART_AGENT_SCHEMA_PATH = "schemas/cart-agent-result.schema.json";
 
 const inspectOwnedCart = async (
   session: OwnedChromeSession,
@@ -148,6 +153,31 @@ const inspectOwnedCart = async (
     return await inspectCartState(createPlaywrightCartPageAdapter(page), {
       cartUrl: WHOLE_FOODS_CART_URL,
     });
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+};
+
+const prepareOwnedCartAgentPage = async (
+  session: OwnedChromeSession,
+): Promise<void> => {
+  if (session.remoteDebuggingPort === undefined) {
+    throw new Error("Chrome was not launched with a debugging port");
+  }
+  const browser = await connectToOwnedChrome(session.remoteDebuggingPort);
+  try {
+    const context = browser.contexts()[0];
+    if (!context) throw new Error("Chrome exposed no browser context");
+    const page = context.pages().find((candidate) =>
+      isWholeFoodsPage(candidate.url()),
+    );
+    if (!page) throw new Error("Chrome exposed no Whole Foods browser page");
+    await page.goto(WHOLE_FOODS_URL, { waitUntil: "domcontentloaded" });
+    if (!isWholeFoodsPage(page.url()) || /(?:^|\/)cart(?:\/|$)/i.test(new URL(page.url()).pathname)) {
+      throw new Error(
+        `Could not return the controlled tab to the Whole Foods shopping page: ${page.url()}`,
+      );
+    }
   } finally {
     await browser.close().catch(() => undefined);
   }
@@ -311,8 +341,8 @@ export async function runCli(
     if (parsed.command === "build") {
       writeRequestSnapshot(requestSource!, paths.requestPath);
       writeRunMetadata(paths, requestSource!, requestSha256, {
-        model: CART_MODEL,
-        reasoningEffort: CART_REASONING_EFFORT,
+        model: CART_AGENT_MODEL,
+        reasoningEffort: CART_AGENT_REASONING_EFFORT,
       });
     }
 
@@ -379,7 +409,10 @@ export async function runCli(
     if (parsed.command !== "build") {
       try {
         const check = dependencies.runDeterministicCheck ?? runDeterministicCheck;
-        const report = await check(parsed.command, browser);
+        const report = await check(parsed.command, browser, {
+          expectedAddressText: config.expectedDeliveryAddressText,
+          deliveryMode: config.deliveryMode,
+        });
         writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
           mode: 0o600,
         });
@@ -463,7 +496,10 @@ export async function runCli(
     const requestValue = request!;
     const check = dependencies.runDeterministicCheck ?? runDeterministicCheck;
     const inspect = dependencies.inspectCart ?? inspectOwnedCart;
-    const preflight = (await check("auth-check", browser)) as AuthReport;
+    const preflight = (await check("auth-check", browser, {
+      expectedAddressText: config.expectedDeliveryAddressText,
+      deliveryMode: config.deliveryMode,
+    })) as AuthReport;
     const preflightReady =
       preflight.runStatus === "completed" &&
       preflight.authenticated &&
@@ -509,14 +545,54 @@ export async function runCli(
       return await finish();
     }
 
-    const tasks = flattenIngredientTasks(requestValue);
-    const invokeIngredient: InvokeIngredient =
+    if (baseline.extractionStatus === "degraded") {
+      const reason = `Baseline cart extraction was degraded${baseline.extractionDiagnostic ? `: ${baseline.extractionDiagnostic}` : ""}`;
+      const report = buildFailedCartReport({
+        request: requestValue,
+        requestSha256,
+        preflight,
+        failureReason: reason,
+      });
+      writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+        mode: 0o600,
+      });
+      console.error(`Cart baseline verification failed; inspect ${paths.runDir}`);
+      exitCode = 1;
+      return await finish();
+    }
+
+    const prepareCartAgentPage =
+      dependencies.prepareCartAgentPage ??
+      (dependencies.inspectCart ? async () => undefined : prepareOwnedCartAgentPage);
+    try {
+      await prepareCartAgentPage(browser);
+    } catch (error) {
+      const reason =
+        `Could not prepare the Whole Foods shopping page for the Cart Agent: ${error instanceof Error ? error.message : String(error)}`;
+      const report = buildFailedCartReport({
+        request: requestValue,
+        requestSha256,
+        preflight,
+        failureReason: reason,
+        baselineItems: baseline.items,
+      });
+      writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+        mode: 0o600,
+      });
+      console.error(`Cart Agent page preparation failed; inspect ${paths.runDir}`);
+      exitCode = 1;
+      return await finish();
+    }
+
+    const tasks = flattenCartAgentTasks(requestValue);
+    const invokeCartAgent: InvokeCartAgent =
+      dependencies.invokeCartAgent ??
       dependencies.invokeIngredient ??
       (async (input, runSignal) => {
         const remoteDebuggingPort = browser?.remoteDebuggingPort;
         if (remoteDebuggingPort === undefined) {
           throw new Error(
-            "Owned Chrome did not expose a remote debugging port for the ingredient agent",
+            "Owned Chrome did not expose a remote debugging port for the Cart Agent",
           );
         }
         const browserOutputDir = join(input.attemptDir, "browser");
@@ -525,7 +601,7 @@ export async function runCli(
           rootDir,
           browserOutputDir,
           reportPath: input.resultPath,
-          schemaPath: join(rootDir, INGREDIENT_SCHEMA_PATH),
+          schemaPath: join(rootDir, CART_AGENT_SCHEMA_PATH),
           playwrightMcpBin: config.playwrightMcpBin,
           remoteDebuggingPort,
         });
@@ -540,21 +616,21 @@ export async function runCli(
         });
         if (result.timedOut || result.exitCode !== 0) {
           throw new Error(
-            `Ingredient agent failed for ${input.task.ingredient.id}`,
+            `Cart Agent failed for ${input.task.ingredient.id}`,
           );
         }
-        const parsedResult = parseIngredientResult(
+        const parsedResult = parseCartAgentResult(
           readFileSync(input.resultPath, "utf8"),
         );
         if (parsedResult.ingredientId !== input.task.ingredient.id) {
           throw new Error(
-            `Ingredient agent returned ${parsedResult.ingredientId} for ${input.task.ingredient.id}`,
+            `Cart Agent returned ${parsedResult.ingredientId} for ${input.task.ingredient.id}`,
           );
         }
         return parsedResult;
       });
 
-    const progress = await runIngredientTasks({
+    const progress = await runCartAgentTasks({
       tasks,
       session: browser,
       invokeAgent: async ({ task, priorResults, signal: agentSignal }) => {
@@ -565,7 +641,7 @@ export async function runCli(
         );
         mkdirSync(attemptDir, { recursive: true, mode: 0o700 });
         const resultPath = join(attemptDir, "result.json");
-        const prompt = renderIngredientPrompt({
+        const prompt = renderCartAgentPrompt({
           task,
           deliveryMode: config.deliveryMode,
           cartContext: {
@@ -574,7 +650,7 @@ export async function runCli(
           },
           browserOutputDir: join(attemptDir, "browser"),
         });
-        return await invokeIngredient(
+        return await invokeCartAgent(
           {
             task,
             priorResults,
@@ -610,7 +686,7 @@ export async function runCli(
 
     const resultReason =
       progress.stopReason ?? "The outer ingredient loop did not complete";
-    const results = completeIngredientResults(
+    const results = completeCartAgentResults(
       requestValue,
       progress.results.map(({ result }) => result),
       resultReason,

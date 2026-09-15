@@ -10,7 +10,7 @@ import type {
   AuthReport,
   CartReport,
   GroceryRequest,
-  IngredientResult,
+  CartAgentResult,
   ShoppingPlan,
 } from "./types.js";
 import { assertShoppingPlanIntegrity } from "./meal-plan.js";
@@ -29,8 +29,8 @@ const authReportValidator = compile("../schemas/auth-report.schema.json");
 const attachmentReportValidator = compile(
   "../schemas/attachment-report.schema.json",
 );
-const ingredientResultValidator = compile(
-  "../schemas/ingredient-result.schema.json",
+const cartAgentResultValidator = compile(
+  "../schemas/cart-agent-result.schema.json",
 );
 const shoppingPlanValidator = compile("../schemas/shopping-plan.schema.json");
 const mealPlanDraftValidator = compile("../schemas/meal-plan-draft.schema.json");
@@ -47,7 +47,7 @@ export class ValidationFailure extends Error {
       | "report"
       | "auth report"
       | "attachment report"
-      | "ingredient result"
+      | "cart agent result"
       | "shopping plan"
       | "meal plan draft",
     errors: ErrorObject[] | null | undefined,
@@ -105,13 +105,16 @@ export function parseReport(text: string): CartReport {
   return value as CartReport;
 }
 
-export function parseIngredientResult(text: string): IngredientResult {
+export function parseCartAgentResult(text: string): CartAgentResult {
   const value: unknown = JSON.parse(text);
-  if (!ingredientResultValidator(value)) {
-    throw new ValidationFailure("ingredient result", ingredientResultValidator.errors);
+  if (!cartAgentResultValidator(value)) {
+    throw new ValidationFailure("cart agent result", cartAgentResultValidator.errors);
   }
-  return value as IngredientResult;
+  return value as CartAgentResult;
 }
+
+/** @deprecated Use parseCartAgentResult. */
+export const parseIngredientResult = parseCartAgentResult;
 
 export function parseShoppingPlan(text: string): ShoppingPlan {
   const value: unknown = JSON.parse(text);

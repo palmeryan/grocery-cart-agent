@@ -2,11 +2,20 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
-/** Fixed model settings for reproducible cart runs. */
-export const CART_MODEL = "gpt-5.6-terra" as const;
-export const CART_REASONING_EFFORT = "low" as const;
-export const MEAL_PLAN_MODEL = "gpt-5.6-terra" as const;
-export const MEAL_PLAN_REASONING_EFFORT = "medium" as const;
+/** Fixed model settings for reproducible agent runs. */
+export const CART_AGENT_MODEL = "gpt-5.6-terra" as const;
+export const CART_AGENT_REASONING_EFFORT = "low" as const;
+export const INGREDIENTS_AGENT_MODEL = "gpt-5.6-terra" as const;
+export const INGREDIENTS_AGENT_REASONING_EFFORT = "medium" as const;
+
+/** @deprecated Use CART_AGENT_MODEL. */
+export const CART_MODEL = CART_AGENT_MODEL;
+/** @deprecated Use CART_AGENT_REASONING_EFFORT. */
+export const CART_REASONING_EFFORT = CART_AGENT_REASONING_EFFORT;
+/** @deprecated Use INGREDIENTS_AGENT_MODEL. */
+export const MEAL_PLAN_MODEL = INGREDIENTS_AGENT_MODEL;
+/** @deprecated Use INGREDIENTS_AGENT_REASONING_EFFORT. */
+export const MEAL_PLAN_REASONING_EFFORT = INGREDIENTS_AGENT_REASONING_EFFORT;
 
 export interface CodexInvocationInput {
   rootDir: string;
@@ -21,7 +30,7 @@ export interface CodexInvocation {
   args: string[];
 }
 
-export interface MealPlanCompilerInvocationInput {
+export interface IngredientsAgentInvocationInput {
   rootDir: string;
   outputPath: string;
   schemaPath: string;
@@ -64,9 +73,9 @@ export function buildCodexInvocation(
     args: [
       "exec",
       "--model",
-      CART_MODEL,
+      CART_AGENT_MODEL,
       "-c",
-      `model_reasoning_effort="${CART_REASONING_EFFORT}"`,
+      `model_reasoning_effort="${CART_AGENT_REASONING_EFFORT}"`,
       "--ignore-user-config",
       "--strict-config",
       "--ephemeral",
@@ -88,7 +97,7 @@ export function buildCodexInvocation(
       "-c",
       "mcp_servers.playwright.enabled=true",
       "-c",
-      'mcp_servers.playwright.default_tools_approval_mode="approve"',
+      "mcp_servers.playwright.default_tools_approval_mode=\"approve\"",
       "-c",
       "mcp_servers.playwright.startup_timeout_sec=30",
       "-c",
@@ -98,17 +107,17 @@ export function buildCodexInvocation(
   };
 }
 
-/** Build a read-only Codex invocation for recipe interpretation without MCP. */
-export function buildMealPlanCompilerInvocation(
-  input: MealPlanCompilerInvocationInput,
+/** Build a read-only Ingredients Agent invocation for recipe interpretation without MCP. */
+export function buildIngredientsAgentInvocation(
+  input: IngredientsAgentInvocationInput,
 ): CodexInvocation {
   return {
     args: [
       "exec",
       "--model",
-      MEAL_PLAN_MODEL,
+      INGREDIENTS_AGENT_MODEL,
       "-c",
-      `model_reasoning_effort="${MEAL_PLAN_REASONING_EFFORT}"`,
+      `model_reasoning_effort="${INGREDIENTS_AGENT_REASONING_EFFORT}"`,
       "--ignore-user-config",
       "--strict-config",
       "--ephemeral",
@@ -127,6 +136,11 @@ export function buildMealPlanCompilerInvocation(
     ],
   };
 }
+
+/** @deprecated Use IngredientsAgentInvocationInput. */
+export type MealPlanCompilerInvocationInput = IngredientsAgentInvocationInput;
+/** @deprecated Use buildIngredientsAgentInvocation. */
+export const buildMealPlanCompilerInvocation = buildIngredientsAgentInvocation;
 
 function openExclusiveLog(path: string): Promise<WriteStream> {
   return new Promise((resolve, reject) => {
