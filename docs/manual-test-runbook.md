@@ -49,9 +49,9 @@ the same owned Chrome profile and localhost CDP endpoint.
   start a separate postal-code workflow.
 - Confirm `checkoutVisited` and `settingsChanged` are false.
 
-### Supervised three-item smoke
+### Supervised per-ingredient smoke
 
-- Put an exactly three-item valid grocery request at the gitignored path
+- Put a small valid grocery request at the gitignored path
   `runs/three-item-smoke.json`.
 - Run one foreground build from the repository root while observing the
   dedicated Chrome window:
@@ -63,11 +63,16 @@ npm run cart -- build runs/three-item-smoke.json
 - Stop immediately on checkout, payment, order, or account-setting pages. If
   the delivery context changes or cannot be established, stop the build and
   return a failed report.
-- Confirm the report and current cart delta match exactly.
+- Confirm the run created one ingredient-agent result per requested ingredient.
+  The browser session should remain the same while the agent contexts change.
+- Confirm the final deterministic cart-text check records the expected
+  product-name/quantity evidence and that the current cart delta matches. Any
+  mismatch is reported under `verificationNotes`; it does not trigger a retry
+  or rewrite the agent's selection.
 
 ### Larger fixtures
 
-- Proceed only after the supervised three-item smoke succeeds.
+- Proceed only after the supervised per-ingredient smoke succeeds.
 - To expand coverage, use these three 10-item fixtures and rerun one unchanged
   request to check duplicate prevention:
   - `examples/staples.json`

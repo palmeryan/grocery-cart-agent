@@ -4,7 +4,9 @@ import { finished } from "node:stream/promises";
 
 /** Fixed model settings for reproducible cart runs. */
 export const CART_MODEL = "gpt-5.6-terra" as const;
-export const CART_REASONING_EFFORT = "medium" as const;
+export const CART_REASONING_EFFORT = "low" as const;
+export const MEAL_PLAN_MODEL = "gpt-5.6-terra" as const;
+export const MEAL_PLAN_REASONING_EFFORT = "medium" as const;
 
 export interface CodexInvocationInput {
   rootDir: string;
@@ -17,6 +19,12 @@ export interface CodexInvocationInput {
 
 export interface CodexInvocation {
   args: string[];
+}
+
+export interface MealPlanCompilerInvocationInput {
+  rootDir: string;
+  outputPath: string;
+  schemaPath: string;
 }
 
 export interface CodexResult {
@@ -85,6 +93,36 @@ export function buildCodexInvocation(
       "mcp_servers.playwright.startup_timeout_sec=30",
       "-c",
       "mcp_servers.playwright.tool_timeout_sec=120",
+      "-",
+    ],
+  };
+}
+
+/** Build a read-only Codex invocation for recipe interpretation without MCP. */
+export function buildMealPlanCompilerInvocation(
+  input: MealPlanCompilerInvocationInput,
+): CodexInvocation {
+  return {
+    args: [
+      "exec",
+      "--model",
+      MEAL_PLAN_MODEL,
+      "-c",
+      `model_reasoning_effort="${MEAL_PLAN_REASONING_EFFORT}"`,
+      "--ignore-user-config",
+      "--strict-config",
+      "--ephemeral",
+      "--sandbox",
+      "read-only",
+      "--json",
+      "--output-schema",
+      input.schemaPath,
+      "--output-last-message",
+      input.outputPath,
+      "--cd",
+      input.rootDir,
+      "-c",
+      'approval_policy="never"',
       "-",
     ],
   };

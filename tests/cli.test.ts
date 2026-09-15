@@ -89,7 +89,7 @@ describe("cart CLI", () => {
         );
         expect(metadata).toMatchObject({
           model: "gpt-5.6-terra",
-          reasoningEffort: "medium",
+          reasoningEffort: "low",
         });
         writeReport(reportPath, requestSha256);
         return { exitCode: 0, signal: null, timedOut: false };
@@ -102,6 +102,59 @@ describe("cart CLI", () => {
     );
     expect(capturedPrompt).toMatch(/\/runs\/[^/\s]+\/browser\/final-state\.png/);
     expect(events).toContain("reserve-port");
+  });
+
+  it("runs one ingredient agent per item and performs the cart check only at the boundaries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cli-ingredients-"));
+    const request = writeValidRequest(root);
+    const events: string[] = [];
+    let inspectCalls = 0;
+    const agentCalls: string[] = [];
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      runDeterministicCheck: async () =>
+        JSON.parse(
+          readFileSync(
+            new URL("fixtures/valid-auth-report.json", import.meta.url),
+            "utf8",
+          ),
+        ),
+      inspectCart: async () => {
+        inspectCalls += 1;
+        return inspectCalls === 1
+          ? {
+              items: [],
+              totalItemCount: 0,
+              url: "https://www.wholefoodsmarket.com/grocery/cart",
+              bodyText: "Your cart is empty",
+            }
+          : {
+              items: [{ productName: "Chicken thighs", quantity: 1 }],
+              totalItemCount: 1,
+              url: "https://www.wholefoodsmarket.com/grocery/cart",
+              bodyText: "Chicken thighs\nCurrent quantity: 1",
+            };
+      },
+      invokeIngredient: async ({ task }) => {
+        agentCalls.push(task.ingredient.id);
+        return {
+          ingredientId: task.ingredient.id,
+          requested: task.ingredient.request,
+          status: "added",
+          productName: "Chicken thighs",
+          packageSize: "1.5 lb",
+          quantity: 1,
+          price: "$9.99",
+          rationale: "The product fits the recipe context.",
+          confidence: "high",
+          failureReason: null,
+        };
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(agentCalls).toEqual(["chicken"]);
+    expect(inspectCalls).toBe(2);
+    expect(events).toEqual(["reserve-port", "chrome-start", "chrome-stop"]);
   });
 
   it("fails before Codex when request validation fails", async () => {

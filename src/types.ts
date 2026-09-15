@@ -16,7 +16,125 @@ export interface GroceryRequest {
   recipes: GroceryRecipe[];
 }
 
+export interface RecipeIngredientQuantity {
+  quantity: number;
+  quantityMax: number | null;
+  unit: string;
+  approximate: boolean;
+}
+
+/** Source-facing and additive representations of one recipe amount. */
+export interface RecipeIngredientAmount {
+  raw: string;
+  sourceQuantity: RecipeIngredientQuantity | null;
+  additiveQuantity: RecipeIngredientQuantity | null;
+}
+
+export interface RecipeIngredientAlternative {
+  name: string;
+  guidance: string;
+}
+
+export interface RecipeIngredientUnresolved {
+  priority: DecisionPriority;
+  message: string;
+}
+
+/** The recipe-facing side of the meal-plan compiler contract. */
+export interface RecipeIngredientLine {
+  sourceText: string;
+  sourceOccurrence: number;
+  componentIndex: number;
+  name: string;
+  amount: RecipeIngredientAmount;
+  preparation: string | null;
+  /** Only product-choice or substitution context needed by the cart agent. */
+  context: string | null;
+  optional: boolean;
+  pantryStatus: PantryStatus;
+  alternatives: RecipeIngredientAlternative[];
+  unresolved: RecipeIngredientUnresolved[];
+  disposition: PantryDisposition;
+  purchaseIntentId: string;
+}
+
+export interface MealPlanRecipe {
+  sourceName: string;
+  ingredients: RecipeIngredientLine[];
+}
+
+export type PantryStatus = "buy" | "assume_pantry" | "uncertain";
+export type PantryDisposition = "buy" | "assume_pantry" | "omit_optional";
+
+export interface PurchaseIntentSource {
+  sourceName: string;
+  sourceText: string;
+  sourceOccurrence: number;
+  componentIndex: number;
+  context: string | null;
+  disposition: PantryDisposition;
+}
+
+export type PurchaseIntentSourceRef = Pick<
+  PurchaseIntentSource,
+  "sourceName" | "sourceText" | "sourceOccurrence" | "componentIndex"
+>;
+
+export interface PurchaseIntent {
+  id: string;
+  primary: {
+    name: string;
+    guidance: string;
+  };
+  alternatives: RecipeIngredientAlternative[];
+  sourceLines: PurchaseIntentSource[];
+  sourceAmounts: RecipeIngredientAmount[];
+  additiveAmount: RecipeIngredientQuantity | null;
+  optional: boolean;
+  disposition: PantryDisposition;
+}
+
+export type DecisionPriority = "high" | "medium" | "low";
+
+export interface MealPlanDecision {
+  priority: DecisionPriority;
+  code:
+    | "consolidated"
+    | "incompatible_amounts"
+    | "pantry_assumption"
+    | "optional_omitted"
+    | "unresolved_interpretation";
+  message: string;
+  sources: PurchaseIntentSourceRef[];
+  purchaseIntentId: string;
+}
+
+/** Versioned output passed from recipe planning to cart execution. */
+export interface ShoppingPlan {
+  contractVersion: 3;
+  recipes: MealPlanRecipe[];
+  purchaseIntents: PurchaseIntent[];
+  decisionLog: MealPlanDecision[];
+}
+
 export type SelectionStatus = "added" | "already_present" | "skipped";
+
+export type IngredientResultStatus =
+  | SelectionStatus
+  | "failed";
+
+export interface IngredientResult {
+  ingredientId: string;
+  requested: string;
+  status: IngredientResultStatus;
+  productName: string | null;
+  packageSize: string | null;
+  quantity: number;
+  price: string | null;
+  rationale: string;
+  confidence: "high" | "medium" | "low";
+  failureReason: string | null;
+}
 
 export interface CartSelection {
   ingredientId: string;
@@ -49,6 +167,7 @@ export interface CartReport {
   finalCartCount: number;
   finalCartDelta: CartItemSnapshot[];
   selections: CartSelection[];
+  verificationNotes?: string[];
   failureReason: string | null;
 }
 

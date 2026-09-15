@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://whole-foods-cart.local/schemas/meal-plan-draft.schema.json",
+  "title": "Recipe ingredient extraction",
+  "description": "Minimal source-preserving extraction produced before deterministic shopping-plan compilation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recipes"],
+  "properties": {
+    "recipes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/recipe" } }
+  },
+  "$defs": {
+    "quantity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quantity", "quantityMax", "unit", "approximate"],
+      "properties": {
+        "quantity": { "type": "number", "exclusiveMinimum": 0 },
+        "quantityMax": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "minLength": 1 },
+        "approximate": { "type": "boolean" }
+      }
+    },
+    "amount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "sourceQuantity", "additiveQuantity"],
+      "properties": {
+        "raw": { "type": "string", "description": "Complete verbatim quantity phrase; empty when absent." },
+        "sourceQuantity": {
+          "anyOf": [{ "$ref": "#/$defs/quantity" }, { "type": "null" }],
+          "description": "The primary count or measurement as written."
+        },
+        "additiveQuantity": {
+          "anyOf": [{ "$ref": "#/$defs/quantity" }, { "type": "null" }],
+          "description": "A source-supported quantity normalized to a unit shared by compatible plan items."
+        }
+      }
+    },
+    "alternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "guidance"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "guidance": { "type": "string", "minLength": 1 }
+      }
+    },
+    "unresolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["priority", "message"],
+      "properties": {
+        "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ingredient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceText", "name", "amount", "preparation", "context", "optional", "pantryStatus", "alternatives", "unresolved"],
+      "properties": {
+        "sourceText": { "type": "string", "minLength": 1, "description": "Entire verbatim source line, repeated for every independently purchasable component." },
+        "name": { "type": "string", "minLength": 1, "description": "Plan-wide canonical purchasable identity with only compatibility-relevant qualifiers." },
+        "amount": { "$ref": "#/$defs/amount" },
+        "preparation": { "type": ["string", "null"] },
+        "context": { "type": ["string", "null"] },
+        "optional": { "type": "boolean" },
+        "pantryStatus": { "type": "string", "enum": ["buy", "assume_pantry", "uncertain"] },
+        "alternatives": { "type": "array", "items": { "$ref": "#/$defs/alternative" } },
+        "unresolved": { "type": "array", "items": { "$ref": "#/$defs/unresolved" } }
+      }
+    },
+    "recipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceName", "ingredients"],
+      "properties": {
+        "sourceName": { "type": "string", "minLength": 1 },
+        "ingredients": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ingredient" } }
+      }
+    }
+  }
+}

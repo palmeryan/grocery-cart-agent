@@ -10,7 +10,11 @@ import type {
   AuthReport,
   CartReport,
   GroceryRequest,
+  IngredientResult,
+  ShoppingPlan,
 } from "./types.js";
+import { assertShoppingPlanIntegrity } from "./meal-plan.js";
+import type { MealPlanDraft } from "./meal-plan.js";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 
@@ -25,6 +29,11 @@ const authReportValidator = compile("../schemas/auth-report.schema.json");
 const attachmentReportValidator = compile(
   "../schemas/attachment-report.schema.json",
 );
+const ingredientResultValidator = compile(
+  "../schemas/ingredient-result.schema.json",
+);
+const shoppingPlanValidator = compile("../schemas/shopping-plan.schema.json");
+const mealPlanDraftValidator = compile("../schemas/meal-plan-draft.schema.json");
 
 const formatErrors = (errors: ErrorObject[] | null | undefined): string =>
   (errors ?? [])
@@ -33,7 +42,14 @@ const formatErrors = (errors: ErrorObject[] | null | undefined): string =>
 
 export class ValidationFailure extends Error {
   constructor(
-    kind: "request" | "report" | "auth report" | "attachment report",
+    kind:
+      | "request"
+      | "report"
+      | "auth report"
+      | "attachment report"
+      | "ingredient result"
+      | "shopping plan"
+      | "meal plan draft",
     errors: ErrorObject[] | null | undefined,
   ) {
     super(`Invalid ${kind}: ${formatErrors(errors)}`);
@@ -87,6 +103,32 @@ export function parseReport(text: string): CartReport {
     throw new ValidationFailure("report", reportValidator.errors);
   }
   return value as CartReport;
+}
+
+export function parseIngredientResult(text: string): IngredientResult {
+  const value: unknown = JSON.parse(text);
+  if (!ingredientResultValidator(value)) {
+    throw new ValidationFailure("ingredient result", ingredientResultValidator.errors);
+  }
+  return value as IngredientResult;
+}
+
+export function parseShoppingPlan(text: string): ShoppingPlan {
+  const value: unknown = JSON.parse(text);
+  if (!shoppingPlanValidator(value)) {
+    throw new ValidationFailure("shopping plan", shoppingPlanValidator.errors);
+  }
+  const plan = value as ShoppingPlan;
+  assertShoppingPlanIntegrity(plan);
+  return plan;
+}
+
+export function parseMealPlanDraft(text: string): MealPlanDraft {
+  const value: unknown = JSON.parse(text);
+  if (!mealPlanDraftValidator(value)) {
+    throw new ValidationFailure("meal plan draft", mealPlanDraftValidator.errors);
+  }
+  return value as MealPlanDraft;
 }
 
 export function assertReportMatchesRequest(

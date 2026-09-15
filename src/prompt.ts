@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CartReport, GroceryRequest } from "./types.js";
+import type {
+  CartItemSnapshot,
+  CartReport,
+  GroceryRequest,
+  IngredientResult,
+} from "./types.js";
+import type { IngredientTask } from "./ingredient-runner.js";
+import type { MealPlanDraft } from "./meal-plan.js";
 
 export interface PromptInput {
   request: GroceryRequest;
@@ -17,6 +24,23 @@ export interface AuthPromptInput {
   browserOutputDir: string;
 }
 
+export interface IngredientPromptInput {
+  task: IngredientTask;
+  deliveryMode: "delivery";
+  cartContext: {
+    baselineItems: readonly CartItemSnapshot[];
+    priorResults: readonly IngredientResult[];
+  };
+  browserOutputDir: string;
+}
+
+export interface MealPlanCompilerPromptInput {
+  recipeDocuments: readonly {
+    sourceName: string;
+    text: string;
+  }[];
+}
+
 const templatePath = fileURLToPath(
   new URL("../prompts/build-cart.md", import.meta.url),
 );
@@ -28,6 +52,16 @@ const authTemplate = readFileSync(
 
 const attachmentTemplate = readFileSync(
   fileURLToPath(new URL("../prompts/attachment-check.md", import.meta.url)),
+  "utf8",
+);
+
+const ingredientTemplate = readFileSync(
+  fileURLToPath(new URL("../prompts/ingredient-agent.md", import.meta.url)),
+  "utf8",
+);
+
+const mealPlanCompilerTemplate = readFileSync(
+  fileURLToPath(new URL("../prompts/meal-plan-compiler.md", import.meta.url)),
   "utf8",
 );
 
@@ -57,6 +91,37 @@ export function renderPrompt(input: PromptInput): string {
     `GROCERY REQUEST:\n${JSON.stringify(input.request, null, 2)}`,
   ].join("\n\n");
 }
+
+export function renderIngredientPrompt(
+  input: IngredientPromptInput,
+): string {
+  return [
+    ingredientTemplate.trim(),
+    `DELIVERY MODE: ${input.deliveryMode}`,
+    `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
+    "INGREDIENT TASK:",
+    JSON.stringify(input.task, null, 2),
+    "CART CONTEXT:",
+    JSON.stringify(input.cartContext, null, 2),
+  ].join("\n\n");
+}
+
+export function renderMealPlanCompilerPrompt(
+  input: MealPlanCompilerPromptInput,
+): string {
+  const documents = input.recipeDocuments.map(({ sourceName, text }) =>
+    [
+      `RECIPE SOURCE: ${sourceName}`,
+      "BEGIN RECIPE SOURCE",
+      text,
+      "END RECIPE SOURCE",
+    ].join("\n"),
+  );
+  return [mealPlanCompilerTemplate.trim(), ...documents].join("\n\n");
+}
+
+/** Compile-time-only assertion for callers that deserialize planner output. */
+export type MealPlanCompilerOutput = MealPlanDraft;
 
 export function renderAuthPrompt(input: AuthPromptInput): string {
   return [

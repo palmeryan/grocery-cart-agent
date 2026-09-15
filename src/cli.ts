@@ -1,4 +1,10 @@
-import { accessSync, constants, readFileSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -16,7 +22,11 @@ import {
   reserveLocalPort,
   type LaunchChromeInput,
 } from "./browser.js";
-import { runDeterministicCheck } from "./deterministic-checks.js";
+import {
+  connectToOwnedChrome,
+  isWholeFoodsPage,
+  runDeterministicCheck,
+} from "./deterministic-checks.js";
 import {
   buildCodexInvocation,
   CART_MODEL,
@@ -24,14 +34,30 @@ import {
   runCodex,
 } from "./codex.js";
 import { loadConfig } from "./config.js";
+import {
+  createPlaywrightCartPageAdapter,
+  inspectCartState,
+  type CartInspectionResult,
+} from "./cart-state.js";
+import {
+  flattenIngredientTasks,
+  runIngredientTasks,
+  type IngredientTask,
+} from "./ingredient-runner.js";
 import { acquireRunLock, type RunLock } from "./lock.js";
-import { renderPrompt } from "./prompt.js";
+import { renderIngredientPrompt, renderPrompt } from "./prompt.js";
+import {
+  buildCartReport,
+  buildFailedCartReport,
+  completeIngredientResults,
+} from "./report-builder.js";
 import {
   assertAttachmentReportSafe,
   assertAuthReportSafe,
   assertReportMatchesRequest,
   assertReportPreflight,
   loadRequest,
+  parseIngredientResult,
   parseAttachmentReport,
   parseAuthReport,
   parseReport,
@@ -40,6 +66,7 @@ import type { CodexResult } from "./codex.js";
 import type {
   AttachmentReport,
   AuthReport,
+  IngredientResult,
   OwnedChromeSession,
   RunPaths,
 } from "./types.js";
@@ -55,12 +82,29 @@ type InvokeCodex = (
   signal?: AbortSignal,
 ) => Promise<CodexResult>;
 
+interface InvokeIngredientInput {
+  task: IngredientTask;
+  priorResults: readonly IngredientResult[];
+  attemptDir: string;
+  resultPath: string;
+  prompt: string;
+}
+
+type InvokeIngredient = (
+  input: InvokeIngredientInput,
+  signal?: AbortSignal,
+) => Promise<IngredientResult>;
+
 type CommandKind = RunPaths["kind"];
 
 interface CliDependencies {
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
   invokeCodex?: InvokeCodex;
+  invokeIngredient?: InvokeIngredient;
+  inspectCart?: (
+    session: OwnedChromeSession,
+  ) => Promise<CartInspectionResult>;
   signal?: AbortSignal;
   secureReport?: (path: string) => void;
   launchBrowser?: (input: LaunchChromeInput) => Promise<OwnedChromeSession>;
@@ -83,7 +127,31 @@ const USAGE = `usage: cart build <request.json>
        cart attachment-check`;
 
 const WHOLE_FOODS_URL = "https://www.wholefoodsmarket.com/grocery/search";
+const WHOLE_FOODS_CART_URL = "https://www.wholefoodsmarket.com/grocery/cart";
 const EXAMPLE_URL = "https://example.com";
+const INGREDIENT_SCHEMA_PATH = "schemas/ingredient-result.schema.json";
+
+const inspectOwnedCart = async (
+  session: OwnedChromeSession,
+): Promise<CartInspectionResult> => {
+  if (session.remoteDebuggingPort === undefined) {
+    throw new Error("Chrome was not launched with a debugging port");
+  }
+  const browser = await connectToOwnedChrome(session.remoteDebuggingPort);
+  try {
+    const context = browser.contexts()[0];
+    if (!context) throw new Error("Chrome exposed no browser context");
+    const page = context.pages().find((candidate) =>
+      isWholeFoodsPage(candidate.url()),
+    );
+    if (!page) throw new Error("Chrome exposed no Whole Foods browser page");
+    return await inspectCartState(createPlaywrightCartPageAdapter(page), {
+      cartUrl: WHOLE_FOODS_CART_URL,
+    });
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+};
 
 /**
  * Install SIGINT/SIGTERM handlers only for the real CLI entrypoint lifetime.
@@ -134,14 +202,6 @@ const assertExecutable = (path: string, label: string): void => {
   } catch {
     throw new Error(`${label} is missing or not executable: ${path}`);
   }
-};
-
-const schemaPathFor = (rootDir: string, command: CommandKind): string => {
-  if (command === "build") return join(rootDir, "schemas", "report.schema.json");
-  if (command === "auth-check") {
-    return join(rootDir, "schemas", "auth-report.schema.json");
-  }
-  return join(rootDir, "schemas", "attachment-report.schema.json");
 };
 
 export async function runCli(
@@ -283,20 +343,30 @@ export async function runCli(
       return await finish();
     }
 
-    let prompt: string | undefined;
-    if (parsed.command === "build") {
-      const previousReport = findPreviousReport(config.runsDir, requestSha256);
-      prompt = renderPrompt({
-        request: request!,
-        requestSha256,
-        deliveryMode: config.deliveryMode,
-        previousReport,
-        browserOutputDir: paths.browserOutputDir,
-      });
-    }
-
     const signal = dependencies.signal;
     if (signal?.aborted) {
+      if (parsed.command === "build") {
+        const abortedPreflight: AuthReport = {
+          runStatus: "failed",
+          authenticated: false,
+          deliveryModeConfirmed: false,
+          deliveryAddressConfirmed: false,
+          wholeFoodsStorefrontConfirmed: false,
+          checkoutVisited: false,
+          settingsChanged: false,
+          failureReason: "Cart run aborted before deterministic preflight",
+        };
+        invocationAttempted = true;
+        const report = buildFailedCartReport({
+          request: request!,
+          requestSha256,
+          preflight: abortedPreflight,
+          failureReason: abortedPreflight.failureReason!,
+        });
+        writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+          mode: 0o600,
+        });
+      }
       console.error(
         parsed.command === "build"
           ? "Cart run aborted before Codex started"
@@ -340,69 +410,240 @@ export async function runCli(
       return await finish();
     }
 
-    const invoke: InvokeCodex =
-      dependencies.invokeCodex ??
-      (async (_input, runSignal) => {
+    // Preserve the injectable whole-run seam used by the existing CLI
+    // lifecycle tests. The real CLI never supplies this dependency and uses
+    // the per-ingredient path below.
+    if (dependencies.invokeCodex) {
+      const previousReport = findPreviousReport(config.runsDir, requestSha256);
+      const prompt = renderPrompt({
+        request: request!,
+        requestSha256,
+        deliveryMode: config.deliveryMode,
+        previousReport,
+        browserOutputDir: paths.browserOutputDir,
+      });
+      try {
+        invocationAttempted = true;
+        const result = await dependencies.invokeCodex(
+          {
+            reportPath: paths.reportPath,
+            requestSha256,
+            prompt,
+          },
+          signal,
+        );
+        if (signal?.aborted) {
+          console.error(`Cart run aborted; inspect ${paths.runDir}`);
+          exitCode = 1;
+        } else if (result.timedOut || result.exitCode !== 0) {
+          console.error(`Codex failed; inspect ${paths.runDir}`);
+          exitCode = 1;
+        } else {
+          const report = parseReport(readFileSync(paths.reportPath, "utf8"));
+          assertReportMatchesRequest(report, request!);
+          if (report.requestSha256 !== requestSha256) {
+            throw new Error("Report requestSha256 does not match the request");
+          }
+          assertReportPreflight(report);
+          if (report.checkoutVisited || report.settingsChanged) {
+            console.error(`Safety condition violated; inspect ${paths.runDir}`);
+            exitCode = 1;
+          } else {
+            console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
+            exitCode = report.runStatus === "failed" ? 1 : 0;
+          }
+        }
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        exitCode = 2;
+      }
+      return await finish();
+    }
+
+    const requestValue = request!;
+    const check = dependencies.runDeterministicCheck ?? runDeterministicCheck;
+    const inspect = dependencies.inspectCart ?? inspectOwnedCart;
+    const preflight = (await check("auth-check", browser)) as AuthReport;
+    const preflightReady =
+      preflight.runStatus === "completed" &&
+      preflight.authenticated &&
+      preflight.deliveryModeConfirmed &&
+      preflight.deliveryAddressConfirmed &&
+      preflight.wholeFoodsStorefrontConfirmed &&
+      !preflight.checkoutVisited &&
+      !preflight.settingsChanged;
+
+    invocationAttempted = true;
+    if (!preflightReady) {
+      const report = buildFailedCartReport({
+        request: requestValue,
+        requestSha256,
+        preflight,
+        failureReason:
+          preflight.failureReason ??
+          "Deterministic preflight did not confirm the Whole Foods delivery context",
+      });
+      writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+        mode: 0o600,
+      });
+      console.error(`Cart preflight failed; inspect ${paths.runDir}`);
+      exitCode = 1;
+      return await finish();
+    }
+
+    let baseline: CartInspectionResult;
+    try {
+      baseline = await inspect(browser);
+    } catch (error) {
+      const report = buildFailedCartReport({
+        request: requestValue,
+        requestSha256,
+        preflight,
+        failureReason: `Could not inspect the baseline cart: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+        mode: 0o600,
+      });
+      console.error(`Cart baseline inspection failed; inspect ${paths.runDir}`);
+      exitCode = 1;
+      return await finish();
+    }
+
+    const tasks = flattenIngredientTasks(requestValue);
+    const invokeIngredient: InvokeIngredient =
+      dependencies.invokeIngredient ??
+      (async (input, runSignal) => {
         const remoteDebuggingPort = browser?.remoteDebuggingPort;
         if (remoteDebuggingPort === undefined) {
           throw new Error(
-            "Owned Chrome did not expose a remote debugging port for the cart build",
+            "Owned Chrome did not expose a remote debugging port for the ingredient agent",
           );
         }
+        const browserOutputDir = join(input.attemptDir, "browser");
+        mkdirSync(browserOutputDir, { recursive: true, mode: 0o700 });
         const invocation = buildCodexInvocation({
           rootDir,
-          browserOutputDir: paths!.browserOutputDir,
-          reportPath: paths!.reportPath,
-          schemaPath: schemaPathFor(rootDir, parsed.command),
+          browserOutputDir,
+          reportPath: input.resultPath,
+          schemaPath: join(rootDir, INGREDIENT_SCHEMA_PATH),
           playwrightMcpBin: config.playwrightMcpBin,
           remoteDebuggingPort,
         });
-        return runCodex({
+        const result = await runCodex({
           executable: config.codexBin,
           args: invocation.args,
-          prompt: prompt!,
-          eventsPath: paths!.eventsPath,
-          stderrPath: paths!.stderrPath,
+          prompt: input.prompt,
+          eventsPath: join(input.attemptDir, "codex-events.jsonl"),
+          stderrPath: join(input.attemptDir, "codex-stderr.log"),
           timeoutMs: config.maxRunMs,
           ...(runSignal ? { signal: runSignal } : {}),
         });
+        if (result.timedOut || result.exitCode !== 0) {
+          throw new Error(
+            `Ingredient agent failed for ${input.task.ingredient.id}`,
+          );
+        }
+        const parsedResult = parseIngredientResult(
+          readFileSync(input.resultPath, "utf8"),
+        );
+        if (parsedResult.ingredientId !== input.task.ingredient.id) {
+          throw new Error(
+            `Ingredient agent returned ${parsedResult.ingredientId} for ${input.task.ingredient.id}`,
+          );
+        }
+        return parsedResult;
       });
 
-    try {
-      invocationAttempted = true;
-      const result = await invoke(
-        {
-          reportPath: paths.reportPath,
-          requestSha256,
-          prompt: prompt!,
-        },
-        signal,
-      );
-
-      if (signal?.aborted) {
-        console.error(
-          parsed.command === "build"
-            ? `Cart run aborted; inspect ${paths.runDir}`
-            : `${parsed.command} aborted; inspect ${paths.runDir}`,
+    const progress = await runIngredientTasks({
+      tasks,
+      session: browser,
+      invokeAgent: async ({ task, priorResults, signal: agentSignal }) => {
+        const attemptDir = join(
+          paths!.runDir,
+          "ingredients",
+          task.ingredient.id,
         );
+        mkdirSync(attemptDir, { recursive: true, mode: 0o700 });
+        const resultPath = join(attemptDir, "result.json");
+        const prompt = renderIngredientPrompt({
+          task,
+          deliveryMode: config.deliveryMode,
+          cartContext: {
+            baselineItems: baseline.items,
+            priorResults,
+          },
+          browserOutputDir: join(attemptDir, "browser"),
+        });
+        return await invokeIngredient(
+          {
+            task,
+            priorResults,
+            attemptDir,
+            resultPath,
+            prompt,
+          },
+          agentSignal,
+        );
+      },
+      ...(signal ? { signal } : {}),
+      onProgress: async (current) => {
+        writeFileSync(
+          join(paths!.runDir, "progress.json"),
+          `${JSON.stringify(current)}\n`,
+          { mode: 0o600 },
+        );
+      },
+    });
+
+    let final: CartInspectionResult;
+    let finalInspectionFailure: string | null = null;
+    try {
+      final = await inspect(browser);
+    } catch (error) {
+      final = {
+        ...baseline,
+        bodyText: "",
+      };
+      finalInspectionFailure =
+        `Could not inspect the final cart: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    const resultReason =
+      progress.stopReason ?? "The outer ingredient loop did not complete";
+    const results = completeIngredientResults(
+      requestValue,
+      progress.results.map(({ result }) => result),
+      resultReason,
+    );
+    const report = buildCartReport({
+      request: requestValue,
+      requestSha256,
+      preflight,
+      baseline,
+      final,
+      results,
+      stopped: progress.stopped,
+      stopReason: progress.stopReason,
+      ...(finalInspectionFailure
+        ? { additionalVerificationNotes: [finalInspectionFailure] }
+        : {}),
+    });
+    writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
+      mode: 0o600,
+    });
+
+    try {
+      assertReportMatchesRequest(report, requestValue);
+      if (report.requestSha256 !== requestSha256) {
+        throw new Error("Report requestSha256 does not match the request");
+      }
+      assertReportPreflight(report);
+      if (report.checkoutVisited || report.settingsChanged) {
+        console.error(`Safety condition violated; inspect ${paths.runDir}`);
         exitCode = 1;
-      } else if (result.timedOut || result.exitCode !== 0) {
-        console.error(`Codex failed; inspect ${paths.runDir}`);
-        exitCode = 1;
-      } else if (parsed.command === "build") {
-        const report = parseReport(readFileSync(paths.reportPath, "utf8"));
-        assertReportMatchesRequest(report, request!);
-        if (report.requestSha256 !== requestSha256) {
-          throw new Error("Report requestSha256 does not match the request");
-        }
-        assertReportPreflight(report);
-        if (report.checkoutVisited || report.settingsChanged) {
-          console.error(`Safety condition violated; inspect ${paths.runDir}`);
-          exitCode = 1;
-        } else {
-          console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
-          exitCode = report.runStatus === "failed" ? 1 : 0;
-        }
+      } else {
+        console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
+        exitCode = report.runStatus === "failed" ? 1 : 0;
       }
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));

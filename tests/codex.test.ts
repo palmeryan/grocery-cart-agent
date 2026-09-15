@@ -11,7 +11,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CART_MODEL,
   CART_REASONING_EFFORT,
+  MEAL_PLAN_MODEL,
+  MEAL_PLAN_REASONING_EFFORT,
   buildCodexInvocation,
+  buildMealPlanCompilerInvocation,
   createKillEscalation,
   runCodex,
 } from "../src/codex.js";
@@ -78,6 +81,27 @@ describe("Codex invocation", () => {
       remoteDebuggingPort: 45678,
     });
     expect(invocation.args.at(-1)).toBe("-");
+  });
+
+  it("builds a read-only planner invocation without browser or MCP settings", () => {
+    const invocation = buildMealPlanCompilerInvocation({
+      rootDir: "/repo",
+      outputPath: "/repo/runs/id/meal-plan-draft.json",
+      schemaPath: "/repo/schemas/meal-plan-draft.schema.json",
+    });
+    const joined = invocation.args.join(" ");
+    expect(invocation.args).toContain("--output-schema");
+    expect(invocation.args).toContain("/repo/schemas/meal-plan-draft.schema.json");
+    expect(invocation.args).toContain("--output-last-message");
+    expect(invocation.args).toContain("/repo/runs/id/meal-plan-draft.json");
+    expect(invocation.args).toContain("read-only");
+    expect(invocation.args).toContain(MEAL_PLAN_MODEL);
+    expect(invocation.args).toContain(
+      `model_reasoning_effort="${MEAL_PLAN_REASONING_EFFORT}"`,
+    );
+    expect(invocation.args.at(-1)).toBe("-");
+    expect(joined).not.toContain("playwright");
+    expect(joined).not.toContain("--cdp-endpoint");
   });
 });
 

@@ -1,3 +1,6 @@
+This legacy whole-run prompt is retained for compatibility tests only.
+Production cart builds use `prompts/ingredient-agent.md` once per ingredient.
+
 You are operating a live Whole Foods Market delivery cart.
 
 Operate only on the Whole Foods storefront, product/search pages, and the Whole
@@ -54,11 +57,10 @@ FOR EACH INGREDIENT:
    For weighted products, the first Add to Cart click may open a quantity
    selector instead of adding immediately. Select the smallest estimated
    quantity that meets the request, then click the resulting Add to Cart
-   control and wait for the cart badge or cart page to reflect the addition.
-   A quantity selector by itself is not a verified cart add.
-7. Verify the cart delta before continuing. If the cart remains unchanged,
-   recover from the intermediate product-page state or mark the ingredient
-   skipped with an accurate reason; do not report it as added.
+   control and wait for an on-page add confirmation. A quantity selector by itself is not a verified cart add.
+7. Stay in the shopping flow and continue with the next ingredient. Do not
+   navigate to the cart or reset to the homepage between ingredients; the
+   final cart check happens once after the loop.
 
 RERUN:
 - Use the prior report only as context.
