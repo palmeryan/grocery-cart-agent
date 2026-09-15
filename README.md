@@ -1,115 +1,30 @@
 # Whole Foods Cart Builder
 
-Local cart runner using the Codex CLI and Microsoft Playwright MCP to turn
-recipe JSON into a Whole Foods delivery cart. The runner uses one dedicated
-Chrome session and one fresh adaptive agent invocation per ingredient.
+Local cart runner using Codex CLI and Playwright MCP. The **Ingredients Agent** reads recipe documents and produces the versioned `ShoppingPlan`; the **Cart Agent** receives one ingredient at a time and uses a fresh invocation to add products to Whole Foods. The ShoppingPlan contract remains versioned and unchanged.
 
-The meal-plan compiler is the new boundary for unstructured recipe input. A
-recipe-reading agent extracts source-preserving ingredient facts, consistent
-purchasable identities, and additive quantities. `src/meal-plan.ts` then derives
-opaque intent IDs from source membership, applies pantry and optional policy,
-consolidates matching identities, and produces a versioned shopping plan with
-provenance and a prioritized decision log. The browser layer is not yet switched
-over to this contract; the existing request/report path remains compatible while
-the plan contract is validated against real recipe sources.
+The shell owns the dedicated Chrome lifecycle, preflight, baseline cart inspection, one fresh Cart Agent invocation per ingredient, and final verification. Baseline/final extraction degradation and any verification mismatch fail the run; they are never reported as successful. The browser returns to the Whole Foods grocery search page after baseline inspection before the first Cart Agent starts.
 
-## Current outcome
+## Configuration
 
-The earlier dedicated-profile live smoke did not complete the cart workflow.
-Cart-matching acceptance runs (staples / ambiguous / substitutions, controlled
-rerun, later-day persistence) remain to be performed.
+Safe Ryan/Lamar defaults are retained, but delivery context is configurable:
 
-The CLI owns a dedicated Chrome profile. Both its diagnostics and the
-cart-building agent connect directly to that owned Chrome instance over
-localhost CDP. The account's saved default address is the delivery context;
-Lamar is the intended Whole Foods store. Treat the commands below as the cart
-entrypoint until a live end-to-end run succeeds.
+- `WFM_EXPECTED_DELIVERY_ADDRESS` — expected visible address text (optional when ZIP is sufficient).
+- `WFM_EXPECTED_DELIVERY_ZIP` — expected ZIP; defaults to `43214`.
+- `WFM_CHROME_PROFILE_DIR`, `WFM_MAX_RUN_MS`, `WFM_CHROME_STARTUP_TIMEOUT_MS`, and `WFM_CHROME_STOP_TIMEOUT_MS` retain their existing meanings.
 
-The build has a deterministic shell around an adaptive per-ingredient middle.
-The shell validates the request, owns the Chrome lifecycle and run lock,
-configures Playwright MCP, runs preflight, records the baseline cart, invokes
-one browser-enabled agent for each ingredient, and performs one deterministic
-final cart-text verification. Each agent interprets recipe context, searches,
-chooses products or sensible substitutions, and handles the live add flow.
-There is no deterministic candidate-search or product-selection pass.
-If final cart text does not match an agent result, the report records a
-`verificationNotes` entry; it does not retry the ingredient or rewrite the
-agent's selection.
+Address confirmation and delivery-mode confirmation are independent observations. Checkout and account/settings safety remains enforced.
 
-## Operating limits
-
-The agent is instructed to build a delivery cart, preserve unrelated items, and
-stop before checkout or order submission. These are prompt instructions, not a
-browser-enforced checkout block. Supervise the first end-to-end run and use
-`Ctrl-C` if needed.
-
-Use the dedicated test profile. Local output in `runs/` is gitignored and may
-contain account information and connection tokens; keep it local.
-
-## Prerequisites
-
-- macOS with Google Chrome
-- Node.js 22.16.0 or newer
-- Codex CLI 0.154.0 or newer, signed into the intended ChatGPT account
-
-The cart runner explicitly uses the Codex `gpt-5.6-terra` model with low
-reasoning effort for each ingredient agent invocation.
-
-All harness commands below run from the repository root.
-
-## Install
+## Install and run
 
 ```bash
 npm install
 npm test
 npm run typecheck
 npm run lint
+npm run login
+npm run cart -- attachment-check
+npm run auth-check
+npm run cart -- build path/to/request.json
 ```
 
-## Browser authentication
-
-The cart command launches and owns a dedicated normal Chrome instance at
-`~/.whole-foods-cart/chrome-profile`. It never attaches to the everyday Chrome
-profile.
-
-1. Run `npm run login`.
-2. Sign in to Whole Foods Market and confirm the account's saved default
-   address is the intended delivery address, with Lamar as the store context.
-3. Close the dedicated Chrome window.
-4. Run `npm run cart -- attachment-check` to verify deterministic Chrome/CDP
-   startup against Example Domain without opening the storefront.
-5. Run `npm run auth-check` to verify authentication and delivery context
-   deterministically, without invoking Codex.
-6. After the auth check succeeds, run
-   `npm run cart -- build path/to/request.json`.
-
-The CLI starts Chrome on demand and closes only the instance it launched.
-The build passes the owned Chrome's localhost CDP endpoint to Playwright MCP;
-it does not open an MCP connection tab or require a second browser window.
-Browser-tool connection details can still appear in tool output and saved run
-artifacts; treat those outputs as sensitive and do not commit or upload them.
-
-### Recovery lock
-
-If the CLI says Chrome still uses the dedicated profile, it intentionally
-leaves `.wfm-cart.lock` in place. Do not remove it while any process uses
-`~/.whole-foods-cart/chrome-profile`.
-
-From the repository root, inspect first:
-
-```bash
-ps -axo pid=,command= | grep -- '--user-data-dir=.*/.whole-foods-cart/chrome-profile'
-```
-
-After confirming that no matching Chrome process remains, remove the lock from
-the repository root only:
-
-```bash
-rm .wfm-cart.lock
-```
-
-## Manual verification
-
-Use `docs/manual-test-runbook.md` for the short live verification sequence.
-Do not remove a recovery lock until the repository-root inspect step shows no
-Chrome process on the dedicated profile.
+Use `docs/manual-test-runbook.md` for live verification. Keep the dedicated profile and `runs/` output private; do not checkout or submit an order.
