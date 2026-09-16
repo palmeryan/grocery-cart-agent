@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
+import { classifyCartAgentUrl } from "../src/cli.js";
 
 const schemaPath = fileURLToPath(
   new URL("../schemas/cart-agent-result.schema.json", import.meta.url),
@@ -110,29 +111,28 @@ describe("Cart Agent prompt contract", () => {
     const prompt = readPrompt();
     expect(prompt).toMatch(/adaptive/i);
     expect(prompt).toMatch(/inspect|observe|re-evaluate/i);
-    expect(prompt).toMatch(/fixed product-search recipe|precomputed candidate list/i);
+    expect(prompt).toMatch(/choose.*candidate|choose.*product|decide what to search/i);
   });
 
-  it("keeps cart navigation out of the per-ingredient agent", () => {
+  it("finishes add interactions without requiring on-page confirmation", () => {
     const prompt = readPrompt();
     expect(prompt).toMatch(/weighted product/i);
     expect(prompt).toMatch(/quantity selector/i);
-    expect(prompt).toMatch(/intermediate browser state/i);
-    expect(prompt).toMatch(/on-page confirmation/i);
-    expect(prompt).toMatch(/do not navigate to the cart/i);
-    expect(prompt).toMatch(/deterministic shell[\s\S]*single final cart check/i);
-    expect(prompt).toMatch(/do not navigate back to a homepage/i);
+    expect(prompt).toMatch(/commit.*item|control that commits/i);
+    expect(prompt).not.toMatch(/on-page confirmation/i);
   });
 
   it("prohibits checkout and settings changes", () => {
     const prompt = readPrompt();
-    expect(prompt).toMatch(/may\s+not\s+open\s+or\s+enter\s+checkout/i);
-    expect(prompt).toMatch(/do\s+not\s+change\s+account,\s+delivery,\s+pickup,\s+payment,\s+or\s+address settings/i);
+    expect(prompt).toMatch(/never enter\s+checkout/i);
+    expect(prompt).toMatch(/never[\s\S]*change account or fulfillment settings/i);
   });
 
-  it("requires one structured CartSelection-compatible result", () => {
+  it("requires a structured result matching the harness schema", () => {
     const prompt = readPrompt();
-    expect(prompt).toMatch(/exactly one JSON object and nothing else/i);
+    expect(prompt).toMatch(/exactly one JSON object/i);
+    expect(prompt).toContain("schemas/cart-agent-result.schema.json");
+    expect(prompt).not.toMatch(/claim `added` only|on-page confirmation/i);
     for (const field of [
       "ingredientId",
       "requested",
@@ -146,8 +146,23 @@ describe("Cart Agent prompt contract", () => {
       "confidence",
       "failureReason",
     ]) {
-      expect(prompt).toContain(`\`${field}\``);
+      expect(compileValidator().schema).toHaveProperty("properties." + field);
     }
-    expect(prompt).toMatch(/added.*only when.*evidence|claim `added` only/i);
+  });
+});
+
+describe("Cart Agent runtime page classification", () => {
+  it("does not fail a valid Whole Foods result solely because the tab ends on cart", () => {
+    expect(classifyCartAgentUrl("https://www.wholefoodsmarket.com/grocery/cart")).toMatchObject({
+      safe: true,
+      checkoutVisited: false,
+      settingsChanged: false,
+      failureReason: null,
+    });
+  });
+
+  it("continues to reject checkout and settings pages", () => {
+    expect(classifyCartAgentUrl("https://www.wholefoodsmarket.com/grocery/checkout").safe).toBe(false);
+    expect(classifyCartAgentUrl("https://www.wholefoodsmarket.com/account/address").safe).toBe(false);
   });
 });

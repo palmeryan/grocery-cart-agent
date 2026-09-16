@@ -27,9 +27,7 @@ describe("agent naming contracts", () => {
     expect(task).toBeDefined();
     const prompt = renderCartAgentPrompt({
       task: task!,
-      deliveryMode: "delivery",
       cartContext: { baselineItems: [], priorResults: [] },
-      browserOutputDir: "/tmp/browser",
     });
     expect(prompt).toContain("# Cart Agent");
     expect(prompt).toContain("CART AGENT TASK:");
