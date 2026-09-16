@@ -51,7 +51,15 @@ export interface CartFlowOptions {
   baseline: readonly CartItemSnapshot[];
   search(query: string): Promise<ProductCandidate[]>;
   decide(task: CartTask, candidates: readonly ProductCandidate[], cart: readonly CartItemSnapshot[]): Promise<CartDecision>;
-  add(candidate: ProductCandidate, quantity: number, option: string | null, before: readonly CartNetworkItem[]): Promise<CartNetworkSnapshot>;
+  add(
+    task: CartTask,
+    candidate: ProductCandidate,
+    quantity: number,
+    option: string | null,
+    before: readonly CartNetworkItem[],
+    cart: readonly CartItemSnapshot[],
+    recordAdditionalDecision: (durationMs: number) => void,
+  ): Promise<CartNetworkSnapshot | { snapshot: CartNetworkSnapshot; quantity: number; reason: string | null }>;
   onProgress?(progress: CartFlowProgress): void | Promise<void>;
   signal?: AbortSignal;
   now?: () => number;
@@ -166,9 +174,25 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
         const before = cart.map((item) => ({ asin: item.productId!, quantity: item.quantity }));
         mayHaveCommitted = true;
         const interactionStarted = now();
+        let additionalDecisionMs = 0;
         let snapshot: CartNetworkSnapshot;
-        try { snapshot = await options.add(candidate, decision.quantity, decision.option, before); }
-        finally { interactionAndConfirmationMs += now() - interactionStarted; }
+        let finalReason = decision.reason;
+        try {
+          const added = await options.add(task, candidate, decision.quantity, decision.option, before, cart, (durationMs) => {
+            modelCalls += 1;
+            decisionMs += durationMs;
+            additionalDecisionMs += durationMs;
+          });
+          if ("snapshot" in added) {
+            snapshot = added.snapshot;
+            quantity = added.quantity;
+            finalReason = added.reason ?? finalReason;
+          } else {
+            snapshot = added;
+          }
+        } finally {
+          interactionAndConfirmationMs += Math.max(0, now() - interactionStarted - additionalDecisionMs);
+        }
         latestSnapshot = snapshot;
         names.set(candidate.id.toUpperCase(), candidate.productName);
         cart = fromSnapshot(snapshot, names);
@@ -176,8 +200,8 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
           ingredientId: task.ingredient.id, requested: task.ingredient.request,
           status: "added", productName: candidate.productName,
           productId: candidate.id.toUpperCase(), packageSize: candidate.packageSize,
-          quantity: decision.quantity, price: candidate.price,
-          rationale: decision.reason ?? `Selected ${candidate.productName}; cart increase confirmed.`,
+          quantity: quantity!, price: candidate.price,
+          rationale: finalReason ?? `Selected ${candidate.productName}; cart increase confirmed.`,
           confidence: "medium", failureReason: null,
         });
         break;

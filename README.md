@@ -30,7 +30,7 @@ The build has a deterministic harness around a bounded per-item shopping decisio
 The shell validates the Shopping List, owns the Chrome lifecycle and run lock,
 independently confirms delivery mode and the Whole
 Foods storefront, records the baseline cart, returns the tab to grocery search, and invokes
-one shopping decision for each list item, verifies the browser remains in the
+a shopping decision for each list item, verifies the browser remains in the
 shopping flow after every decision, and performs one deterministic final
 cart verification. The decision model chooses among observed product cards,
 requests a better search, identifies an existing item, or skips. The harness
@@ -117,7 +117,9 @@ statement of a ChatGPT subscription charge; pricing assumptions and caveats are
 embedded in the file.
 `runs/<run-id>/timings.json` records total wall time plus per-ingredient search,
 decision, and interaction/confirmation time. Keep both files when comparing
-this harness with earlier agent-driven runs.
+this harness with earlier agent-driven runs. If a weighted product opens a
+quantity chooser, the harness sends its estimated-weight options to the
+decision model before the final Add; that second call appears in both files.
 
 The CLI starts Chrome on demand and closes only the instance it launched.
 If a cart or authentication check finds that sign-in or delivery context is not

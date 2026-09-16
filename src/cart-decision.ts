@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import type { ReasoningEffort } from "./codex.js";
 import type { CartItemSnapshot } from "./types.js";
+import type { QuantityOption } from "./wfm-page.js";
 
 export const DECISION_MODEL = "gpt-5.6-terra" as const;
 export const DECISION_REASONING_EFFORT = "medium" satisfies ReasoningEffort;
@@ -34,6 +35,7 @@ export interface DecisionPromptInput {
   recipeContext?: readonly { id: string; name: string; servings: number; context: string }[];
   candidates: readonly DecisionCandidate[];
   currentCart: readonly CartItemSnapshot[];
+  quantityOptions?: readonly QuantityOption[];
 }
 
 export interface DecisionInvocationInput {
@@ -54,7 +56,15 @@ const errors = (items: ErrorObject[] | null | undefined): string =>
   (items ?? []).map((e) => `${e.instancePath || "/"} ${e.message ?? "invalid"}`).join("; ");
 
 export function renderDecisionPrompt(input: DecisionPromptInput): string {
-  return [template, "BEGIN STOREFRONT OBSERVATION", JSON.stringify(input, null, 2), "END STOREFRONT OBSERVATION"].join("\n\n");
+  return [
+    template,
+    ...(input.quantityOptions ? [
+      "The selected product opened a weighted-item quantity chooser. Reconsider quantity using the listed estimated weights and the ingredient request. Return select with the same candidate ID and a quantity exactly matching one listed option; the earlier quantity was chosen before these options were visible. Do not claim the item is already in the cart.",
+    ] : []),
+    "BEGIN STOREFRONT OBSERVATION",
+    JSON.stringify(input, null, 2),
+    "END STOREFRONT OBSERVATION",
+  ].join("\n\n");
 }
 
 export function parseDecision(text: string): CartDecision {

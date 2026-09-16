@@ -38,4 +38,16 @@ describe("bounded cart decisions", () => {
     expect(invocation.args.join(" ")).not.toContain("playwright");
     expect(invocation.args).toContain("read-only");
   });
+
+  it("shows weighted chooser options as a second bounded decision", () => {
+    const prompt = renderDecisionPrompt({
+      task: { ingredientId: "chicken", requested: "about 1.5 lb chicken thighs" },
+      candidates: [candidates[0]!],
+      currentCart: [],
+      quantityOptions: [{ quantity: 1, label: "1 est. 1.56 lb" }, { quantity: 2, label: "2 est. 3.12 lb" }],
+    });
+    expect(prompt).toContain("The selected product opened a weighted-item quantity chooser");
+    expect(prompt).toContain("1 est. 1.56 lb");
+    expect(prompt).toContain("2 est. 3.12 lb");
+  });
 });
