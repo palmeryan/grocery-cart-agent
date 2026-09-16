@@ -1,14 +1,15 @@
-# Meal-plan compiler boundary
+# Ingredients Agent boundary
 
 ```text
 unstructured recipes
   -> semantic ingredient extraction (agent)
   -> policy and integrity compilation (local code)
   -> purchase intents with provenance
-  -> cart-agent tasks (future integration)
+  -> Shopping List
+  -> Cart Agent tasks
 ```
 
-The compiler's product promise is an autonomous shopping plan that remains
+The compiler's product promise is an autonomous Shopping List that remains
 traceable to every recipe. It is not merely a transcription layer, and it does
 not choose live products or package sizes.
 
@@ -48,7 +49,8 @@ use source-stated package arithmetic or an explicitly supplied equivalent
 measure, allowing compatible totals without losing the original count,
 packaging, approximation, or range.
 
-The cart-facing contract is
-[`schemas/shopping-plan.schema.json`](../schemas/shopping-plan.schema.json).
-The browser layer still consumes the legacy request contract; this work does
-not change cart execution.
+The direct Cart Agent contract is
+[`schemas/shopping-list.schema.json`](../schemas/shopping-list.schema.json).
+The richer source-preserving intermediate is validated against
+[`schemas/recipe-compilation.schema.json`](../schemas/recipe-compilation.schema.json)
+and saved with the run for auditability.

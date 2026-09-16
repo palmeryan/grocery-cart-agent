@@ -7,8 +7,6 @@ export interface AppConfig {
   profileDir: string;
   /** The storefront mode this harness is intended to use. */
   deliveryMode: "delivery";
-  /** Visible address fragment or ZIP expected in the signed-in storefront. */
-  expectedDeliveryAddressText: string;
   maxRunMs: number;
   codexBin: string;
   playwrightMcpBin: string;
@@ -45,8 +43,6 @@ export function loadConfig(
   if (!Number.isInteger(maxRunMs) || maxRunMs < 60_000) {
     throw new Error("WFM_MAX_RUN_MS must be an integer of at least 60000");
   }
-  const expectedDeliveryAddressText =
-    env.WFM_EXPECTED_DELIVERY_ADDRESS?.trim() || "43214";
 
   const absoluteRoot = resolve(rootDir);
   return {
@@ -54,7 +50,6 @@ export function loadConfig(
     runsDir: join(absoluteRoot, "runs"),
     profileDir,
     deliveryMode: "delivery",
-    expectedDeliveryAddressText,
     maxRunMs,
     codexBin: env.CODEX_BIN ?? "codex",
     playwrightMcpBin: env.PLAYWRIGHT_MCP_BIN ?? join(

@@ -1,5 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cart Agent shopping list",
+  "description": "A prebuilt shopping list accepted directly by the Cart Agent path.",
   "type": "object",
   "additionalProperties": false,
   "required": ["recipes"],
@@ -34,7 +36,8 @@
                   "type": "array",
                   "uniqueItems": true,
                   "items": { "type": "string", "minLength": 1 }
-                }
+                },
+                "context": { "type": "string", "minLength": 1 }
               }
             }
           }

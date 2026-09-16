@@ -9,12 +9,12 @@ import type {
   AttachmentReport,
   AuthReport,
   CartReport,
-  GroceryRequest,
+  ShoppingList,
   CartAgentResult,
-  ShoppingPlan,
+  RecipeCompilation,
 } from "./types.js";
-import { assertShoppingPlanIntegrity } from "./meal-plan.js";
-import type { MealPlanDraft } from "./meal-plan.js";
+import { assertRecipeCompilationIntegrity } from "./shopping-list-compiler.js";
+import type { IngredientsAgentOutput } from "./shopping-list-compiler.js";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 
@@ -23,7 +23,7 @@ const compile = (relativePath: string): ValidateFunction => {
   return ajv.compile(JSON.parse(readFileSync(path, "utf8")));
 };
 
-const requestValidator = compile("../schemas/request.schema.json");
+const shoppingListValidator = compile("../schemas/shopping-list.schema.json");
 const reportValidator = compile("../schemas/report.schema.json");
 const authReportValidator = compile("../schemas/auth-report.schema.json");
 const attachmentReportValidator = compile(
@@ -32,8 +32,8 @@ const attachmentReportValidator = compile(
 const cartAgentResultValidator = compile(
   "../schemas/cart-agent-result.schema.json",
 );
-const shoppingPlanValidator = compile("../schemas/shopping-plan.schema.json");
-const mealPlanDraftValidator = compile("../schemas/meal-plan-draft.schema.json");
+const recipeCompilationValidator = compile("../schemas/recipe-compilation.schema.json");
+const ingredientsAgentOutputValidator = compile("../schemas/ingredients-agent-output.schema.json");
 
 const formatErrors = (errors: ErrorObject[] | null | undefined): string =>
   (errors ?? [])
@@ -43,13 +43,13 @@ const formatErrors = (errors: ErrorObject[] | null | undefined): string =>
 export class ValidationFailure extends Error {
   constructor(
     kind:
-      | "request"
+      | "shopping list"
       | "report"
       | "auth report"
       | "attachment report"
       | "cart agent result"
-      | "shopping plan"
-      | "meal plan draft",
+      | "recipe compilation"
+      | "Ingredients Agent output",
     errors: ErrorObject[] | null | undefined,
   ) {
     super(`Invalid ${kind}: ${formatErrors(errors)}`);
@@ -67,9 +67,9 @@ const uniqueDuplicates = (values: string[]): string[] => {
   return [...duplicates];
 };
 
-export function assertRequestIdentity(request: GroceryRequest): void {
-  const recipeIds = request.recipes.map((recipe) => recipe.id);
-  const ingredientIds = request.recipes.flatMap((recipe) =>
+export function assertShoppingListIdentity(shoppingList: ShoppingList): void {
+  const recipeIds = shoppingList.recipes.map((recipe) => recipe.id);
+  const ingredientIds = shoppingList.recipes.flatMap((recipe) =>
     recipe.ingredients.map((ingredient) => ingredient.id),
   );
   const duplicateRecipes = uniqueDuplicates(recipeIds);
@@ -83,18 +83,18 @@ export function assertRequestIdentity(request: GroceryRequest): void {
       : "",
   ].filter(Boolean);
   if (problems.length > 0) {
-    throw new Error(`Invalid request identity: ${problems.join("; ")}`);
+    throw new Error(`Invalid shopping list identity: ${problems.join("; ")}`);
   }
 }
 
-export function loadRequest(path: string): GroceryRequest {
+export function loadShoppingList(path: string): ShoppingList {
   const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!requestValidator(value)) {
-    throw new ValidationFailure("request", requestValidator.errors);
+  if (!shoppingListValidator(value)) {
+    throw new ValidationFailure("shopping list", shoppingListValidator.errors);
   }
-  const request = value as GroceryRequest;
-  assertRequestIdentity(request);
-  return request;
+  const shoppingList = value as ShoppingList;
+  assertShoppingListIdentity(shoppingList);
+  return shoppingList;
 }
 
 export function parseReport(text: string): CartReport {
@@ -113,30 +113,27 @@ export function parseCartAgentResult(text: string): CartAgentResult {
   return value as CartAgentResult;
 }
 
-/** @deprecated Use parseCartAgentResult. */
-export const parseIngredientResult = parseCartAgentResult;
-
-export function parseShoppingPlan(text: string): ShoppingPlan {
+export function parseRecipeCompilation(text: string): RecipeCompilation {
   const value: unknown = JSON.parse(text);
-  if (!shoppingPlanValidator(value)) {
-    throw new ValidationFailure("shopping plan", shoppingPlanValidator.errors);
+  if (!recipeCompilationValidator(value)) {
+    throw new ValidationFailure("recipe compilation", recipeCompilationValidator.errors);
   }
-  const plan = value as ShoppingPlan;
-  assertShoppingPlanIntegrity(plan);
+  const plan = value as RecipeCompilation;
+  assertRecipeCompilationIntegrity(plan);
   return plan;
 }
 
-export function parseMealPlanDraft(text: string): MealPlanDraft {
+export function parseIngredientsAgentOutput(text: string): IngredientsAgentOutput {
   const value: unknown = JSON.parse(text);
-  if (!mealPlanDraftValidator(value)) {
-    throw new ValidationFailure("meal plan draft", mealPlanDraftValidator.errors);
+  if (!ingredientsAgentOutputValidator(value)) {
+    throw new ValidationFailure("Ingredients Agent output", ingredientsAgentOutputValidator.errors);
   }
-  return value as MealPlanDraft;
+  return value as IngredientsAgentOutput;
 }
 
-export function assertReportMatchesRequest(
+export function assertReportMatchesShoppingList(
   report: CartReport,
-  request: GroceryRequest,
+  request: ShoppingList,
 ): void {
   const requested = new Set(
     request.recipes.flatMap((recipe) =>
@@ -158,7 +155,7 @@ export function assertReportMatchesRequest(
       : "",
   ].filter(Boolean);
   if (problems.length > 0) {
-    throw new Error(`Report does not match request: ${problems.join("; ")}`);
+    throw new Error(`Report does not match Shopping List: ${problems.join("; ")}`);
   }
 }
 
@@ -171,7 +168,6 @@ export function assertReportPreflight(report: CartReport): void {
       [
         ["authenticated", report.authenticated],
         ["deliveryModeConfirmed", report.deliveryModeConfirmed],
-        ["deliveryAddressConfirmed", report.deliveryAddressConfirmed],
         ["wholeFoodsStorefrontConfirmed", report.wholeFoodsStorefrontConfirmed],
       ] as const
     )
@@ -235,11 +231,13 @@ export function assertAuthReportSafe(report: AuthReport): void {
   if (report.checkoutVisited || report.settingsChanged) {
     throw new Error("Auth check crossed a prohibited safety boundary");
   }
+}
+
+export function assertAuthReportReady(report: AuthReport): void {
   const missing = (
     [
       ["authenticated", report.authenticated],
       ["deliveryModeConfirmed", report.deliveryModeConfirmed],
-      ["deliveryAddressConfirmed", report.deliveryAddressConfirmed],
       [
         "wholeFoodsStorefrontConfirmed",
         report.wholeFoodsStorefrontConfirmed,
@@ -255,7 +253,7 @@ export function assertAuthReportSafe(report: AuthReport): void {
         ? `: ${missing.join(", ")}`
         : "";
     throw new Error(
-      `Auth check failed${reason}`,
+      `Auth readiness check failed${reason}`,
     );
   }
 }

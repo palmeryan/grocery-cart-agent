@@ -1,7 +1,8 @@
 # Whole Foods cart POC acceptance runbook
 
-Manual evaluation procedure for the unattended cart builder. Do not commit
-`runs/`, profile data, logs, secrets, or live cart contents.
+Manual evaluation procedure for the unattended cart builder. Runtime artifacts
+and the dedicated browser profile are local, gitignored state. Do not publish a
+live browser-session token.
 
 ## Preconditions
 
@@ -79,8 +80,7 @@ requirement.
 
 ## Pass rules
 
-- All three primary runs complete with the saved delivery address and Lamar
-  context.
+- All three primary runs complete in delivery mode with Lamar context.
 - At least 27 of 30 requested ingredients receive defensible matches.
 - Zero added products unrelated to an input ingredient.
 - Zero unreasonable package quantities.

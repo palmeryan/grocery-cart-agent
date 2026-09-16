@@ -9,6 +9,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "cart": "tsx src/cli.ts",
+    "cart-list": "tsx src/cli.ts build",
+    "cart-recipes": "tsx src/cli.ts build-recipes",
     "login": "bash scripts/open-profile.sh",
     "auth-check": "tsx src/cli.ts auth-check",
     "lint": "eslint .",

@@ -2,6 +2,7 @@ export interface GroceryIngredient {
   id: string;
   request: string;
   preferences?: string[];
+  context?: string;
 }
 
 export interface GroceryRecipe {
@@ -12,9 +13,11 @@ export interface GroceryRecipe {
   ingredients: GroceryIngredient[];
 }
 
-export interface GroceryRequest {
+/** Public input shared by the full recipe path and direct Cart Agent path. */
+export interface ShoppingList {
   recipes: GroceryRecipe[];
 }
+
 
 export interface RecipeIngredientQuantity {
   quantity: number;
@@ -40,7 +43,7 @@ export interface RecipeIngredientUnresolved {
   message: string;
 }
 
-/** The recipe-facing side of the meal-plan compiler contract. */
+/** The recipe-facing side of the Ingredients Agent contract. */
 export interface RecipeIngredientLine {
   sourceText: string;
   sourceOccurrence: number;
@@ -58,7 +61,7 @@ export interface RecipeIngredientLine {
   purchaseIntentId: string;
 }
 
-export interface MealPlanRecipe {
+export interface CompiledRecipe {
   sourceName: string;
   ingredients: RecipeIngredientLine[];
 }
@@ -96,7 +99,7 @@ export interface PurchaseIntent {
 
 export type DecisionPriority = "high" | "medium" | "low";
 
-export interface MealPlanDecision {
+export interface CompilationDecision {
   priority: DecisionPriority;
   code:
     | "consolidated"
@@ -109,13 +112,14 @@ export interface MealPlanDecision {
   purchaseIntentId: string;
 }
 
-/** Versioned output passed from recipe planning to cart execution. */
-export interface ShoppingPlan {
+/** Internal source-preserving result used to derive the public ShoppingList. */
+export interface RecipeCompilation {
   contractVersion: 3;
-  recipes: MealPlanRecipe[];
+  recipes: CompiledRecipe[];
   purchaseIntents: PurchaseIntent[];
-  decisionLog: MealPlanDecision[];
+  decisionLog: CompilationDecision[];
 }
+
 
 export type SelectionStatus = "added" | "already_present" | "skipped";
 
@@ -126,6 +130,7 @@ export interface CartAgentResult {
   requested: string;
   status: CartAgentResultStatus;
   productName: string | null;
+  productId: string | null;
   packageSize: string | null;
   quantity: number;
   price: string | null;
@@ -134,16 +139,13 @@ export interface CartAgentResult {
   failureReason: string | null;
 }
 
-/** @deprecated Use CartAgentResultStatus. */
-export type IngredientResultStatus = CartAgentResultStatus;
-/** @deprecated Use CartAgentResult. */
-export type IngredientResult = CartAgentResult;
 
 export interface CartSelection {
   ingredientId: string;
   requested: string;
   status: SelectionStatus;
   productName: string | null;
+  productId: string | null;
   packageSize: string | null;
   quantity: number;
   price: string | null;
@@ -153,15 +155,16 @@ export interface CartSelection {
 
 export interface CartItemSnapshot {
   productName: string;
+  productId?: string;
   quantity: number;
 }
 
 export interface CartReport {
   runStatus: "completed" | "partial" | "failed";
+  verificationStatus: "confirmed" | "inconclusive" | "not_run";
   requestSha256: string;
   authenticated: boolean;
   deliveryModeConfirmed: boolean;
-  deliveryAddressConfirmed: boolean;
   wholeFoodsStorefrontConfirmed: boolean;
   checkoutVisited: boolean;
   settingsChanged: boolean;
@@ -175,10 +178,10 @@ export interface CartReport {
 }
 
 export interface RunPaths {
-  kind: "build" | "auth-check" | "attachment-check";
+  kind: "build" | "build-recipes" | "auth-check" | "attachment-check";
   runId: string;
   runDir: string;
-  requestPath: string;
+  shoppingListPath: string;
   reportPath: string;
   eventsPath: string;
   stderrPath: string;
@@ -200,7 +203,6 @@ export interface AuthReport {
   runStatus: "completed" | "failed";
   authenticated: boolean;
   deliveryModeConfirmed: boolean;
-  deliveryAddressConfirmed: boolean;
   wholeFoodsStorefrontConfirmed: boolean;
   checkoutVisited: boolean;
   settingsChanged: boolean;

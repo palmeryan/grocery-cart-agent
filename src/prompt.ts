@@ -1,26 +1,20 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   CartAgentResult,
   CartItemSnapshot,
   CartReport,
-  GroceryRequest,
+  ShoppingList,
 } from "./types.js";
 import type { CartAgentTask } from "./cart-agent.js";
-import type { MealPlanDraft } from "./meal-plan.js";
+import type { IngredientsAgentOutput as IngredientsAgentResult } from "./shopping-list-compiler.js";
 
 export interface PromptInput {
-  request: GroceryRequest;
+  request: ShoppingList;
   requestSha256: string;
   deliveryMode: "delivery";
   previousReport: CartReport | null;
   /** Absolute path for Playwright MCP artifacts (screenshots/traces). */
-  browserOutputDir: string;
-}
-
-export interface AuthPromptInput {
-  deliveryMode: "delivery";
   browserOutputDir: string;
 }
 
@@ -42,12 +36,7 @@ export interface IngredientsAgentPromptInput {
 }
 
 const templatePath = fileURLToPath(
-  new URL("../prompts/build-cart.md", import.meta.url),
-);
-
-const authTemplate = readFileSync(
-  fileURLToPath(new URL("../prompts/auth-check.md", import.meta.url)),
-  "utf8",
+  new URL("../prompts/legacy-whole-run-cart-agent.md", import.meta.url),
 );
 
 const attachmentTemplate = readFileSync(
@@ -118,29 +107,7 @@ export function renderIngredientsAgentPrompt(
 }
 
 /** Compile-time-only assertion for callers that deserialize Ingredients Agent output. */
-export type IngredientsAgentOutput = MealPlanDraft;
-
-/** @deprecated Use CartAgentPromptInput and renderCartAgentPrompt. */
-export type IngredientPromptInput = CartAgentPromptInput;
-/** @deprecated Use IngredientsAgentPromptInput and renderIngredientsAgentPrompt. */
-export type MealPlanCompilerPromptInput = IngredientsAgentPromptInput;
-/** @deprecated Use renderCartAgentPrompt. */
-export const renderIngredientPrompt = renderCartAgentPrompt;
-/** @deprecated Use renderIngredientsAgentPrompt. */
-export const renderMealPlanCompilerPrompt = renderIngredientsAgentPrompt;
-/** @deprecated Use IngredientsAgentOutput. */
-export type MealPlanCompilerOutput = IngredientsAgentOutput;
-
-export function renderAuthPrompt(input: AuthPromptInput): string {
-  return [
-    authTemplate.trim(),
-    "",
-    `DELIVERY MODE: ${input.deliveryMode}`,
-    `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
-    `AUTH SCREENSHOT PATH: ${join(input.browserOutputDir, "auth-state.png")}`,
-    "",
-  ].join("\n");
-}
+export type IngredientsAgentOutput = IngredientsAgentResult;
 
 export function renderAttachmentPrompt(): string {
   return `${attachmentTemplate.trim()}\n`;

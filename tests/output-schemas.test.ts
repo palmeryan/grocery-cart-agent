@@ -10,9 +10,10 @@ interface JsonSchema {
 const outputSchemas = [
   "attachment-report.schema.json",
   "auth-report.schema.json",
-  "meal-plan-draft.schema.json",
+  "ingredients-agent-output.schema.json",
   "report.schema.json",
-  "shopping-plan.schema.json",
+  "recipe-compilation.schema.json",
+  "shopping-list.schema.json",
 ];
 
 const findPropertiesWithoutTypes = (

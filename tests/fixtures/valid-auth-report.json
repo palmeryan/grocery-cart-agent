@@ -2,7 +2,6 @@
   "runStatus": "completed",
   "authenticated": true,
   "deliveryModeConfirmed": true,
-  "deliveryAddressConfirmed": true,
   "wholeFoodsStorefrontConfirmed": true,
   "checkoutVisited": false,
   "settingsChanged": false,

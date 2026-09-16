@@ -24,19 +24,52 @@ unrelated items. If a suitable item already satisfies this ingredient, report
 
 ## Adaptive browser work
 
+Use the browser tools directly on the current page; the first normal-path
+Playwright call also confirms that the browser is attached. Do not spend a
+separate call on a health check.
+
+Keep the normal path economical: find and use the storefront search control,
+inspect the visible results once with a compact `browser_evaluate` query (for
+example, unique product links, nearby text, and add controls), then choose and
+add the best candidate directly from its search-result card when the card has
+enough product information and an add control. Use the information already
+returned by each call;
+do not repeatedly find the same control, reread unchanged candidates, or query
+page state after every action. Use one relevant interaction per step, and
+inspect again only when the previous result reveals a new decision or needed
+control. A `browser_wait_for` is for a concrete loading state, not routine
+pacing. Prefer the tool's returned evidence; make one compact on-page check
+after adding when needed to establish visible confirmation.
+
+Use `browser_find` to locate an actionable control when its existing reference
+is unavailable, then use `browser_click` or `browser_type` on that result. Open
+the product detail page only when the search-result card lacks information or
+controls needed to make or complete the selection; do not visit it merely to
+recheck a product that the result card already identifies. Handle weighted
+items adaptively: if the first add reveals a quantity selector or a second
+commit control, inspect that new state and complete the add, then verify the
+visible confirmation. Do not count an attempted click, selected quantity,
+toast/loading indicator, or disappearing control alone as proof.
+
+Take a `browser_snapshot` only for recovery when compact structured reads and
+`browser_find` cannot expose a necessary control or the page enters an
+unexpected state. Target the smallest relevant element and shallowest useful
+depth; snapshots are not part of the normal path.
+
 Use the current controlled Whole Foods storefront and inspect the page as you
 work. You decide what to search, which visible candidate best fits the
 ingredient and recipe, whether a sensible substitution is warranted, and how
 to interact with the UI. Do not follow a fixed product-search recipe or rely
-on a precomputed candidate list. Re-evaluate the live page after navigation,
-search, clicks, dialogs, loading states, and other meaningful actions.
+on a precomputed candidate list. Structured reads are observation, not a
+product-selection policy: you still make the live choice. Re-evaluate only
+when the page exposes new evidence needed for the next decision.
 
 Keep the shared browser in the shopping flow. Start from the current Whole
 Foods shopping page, use its search/navigation controls, and leave the browser
 on a normal Whole Foods shopping or product page after the add. Do not navigate
 to the cart after adding this ingredient, do not navigate back to a homepage
-between ingredients, and do not open another tab. The deterministic shell will inspect
-the cart once, after every Cart Agent invocation has finished.
+between ingredients. The deterministic shell will inspect the cart once, after
+every Cart Agent invocation has finished.
 
 Choose a defensible product using the request, amount, package size,
 preferences, recipe context, and current cart. A sensible substitution is
@@ -84,9 +117,13 @@ fields, compatible with the existing `CartSelection` concepts:
 - `ingredientId`: the input ingredient's stable ID
 - `requested`: the original ingredient request
 - `status`: exactly `added`, `already_present`, `skipped`, or `failed`
-- `productName`, `packageSize`, `quantity`, `price`: the selected or existing
+- `productName`, `productId`, `packageSize`, `quantity`, `price`: the selected or existing
   cart item details; use null product fields and quantity `0` for skipped or
-  failed results
+  failed results. Read `productId` from the selected product link: it is the
+  10-character catalog ID at the end of the product URL slug. Do not derive it
+  from the product name. For `already_present`, copy the baseline product name, ID, and
+  quantity; leave package size or price null when the baseline does not provide
+  them rather than inventing them.
 - `rationale`: concise, evidence-based product/outcome reasoning
 - `confidence`: exactly `high`, `medium`, or `low`
 - `failureReason`: null for added/already-present; a non-empty explanation

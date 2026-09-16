@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type {
   DecisionPriority,
-  MealPlanDecision,
-  MealPlanRecipe,
+  CompilationDecision,
+  CompiledRecipe,
   PantryDisposition,
   PantryStatus,
   PurchaseIntent,
@@ -13,7 +13,8 @@ import type {
   RecipeIngredientLine,
   RecipeIngredientQuantity,
   RecipeIngredientUnresolved,
-  ShoppingPlan,
+  RecipeCompilation,
+  ShoppingList,
 } from "./types.js";
 
 /** The semantic facts the recipe-reading agent must extract. */
@@ -29,21 +30,21 @@ export interface RecipeIngredientDraft {
   unresolved: RecipeIngredientUnresolved[];
 }
 
-export interface MealPlanRecipeDraft {
+export interface IngredientsAgentRecipe {
   sourceName: string;
   ingredients: RecipeIngredientDraft[];
 }
 
-export interface MealPlanDraft {
-  recipes: MealPlanRecipeDraft[];
+export interface IngredientsAgentOutput {
+  recipes: IngredientsAgentRecipe[];
 }
 
-export interface MealPlanCompileOptions {
+export interface ShoppingListCompileOptions {
   includeOptional?: boolean;
   assumePantry?: boolean;
 }
 
-const DEFAULT_OPTIONS: Required<MealPlanCompileOptions> = {
+const DEFAULT_OPTIONS: Required<ShoppingListCompileOptions> = {
   includeOptional: false,
   assumePantry: true,
 };
@@ -110,7 +111,7 @@ const combineQuantities = (
 
 const lineDisposition = (
   ingredient: RecipeIngredientDraft,
-  options: Required<MealPlanCompileOptions>,
+  options: Required<ShoppingListCompileOptions>,
 ): PantryDisposition => {
   if (ingredient.optional && !options.includeOptional) return "omit_optional";
   if (ingredient.pantryStatus === "assume_pantry" && options.assumePantry) return "assume_pantry";
@@ -151,18 +152,18 @@ const uniqueSources = (sources: readonly PurchaseIntentSourceRef[]): PurchaseInt
   return [...byKey.values()];
 };
 
-const priorityFor = (code: MealPlanDecision["code"]): DecisionPriority => {
+const priorityFor = (code: CompilationDecision["code"]): DecisionPriority => {
   if (code === "unresolved_interpretation" || code === "incompatible_amounts") return "high";
   if (code === "consolidated") return "medium";
   return "low";
 };
 
 const decision = (
-  code: MealPlanDecision["code"],
+  code: CompilationDecision["code"],
   message: string,
   sources: readonly PurchaseIntentSourceRef[],
   purchaseIntentId: string,
-): MealPlanDecision => ({
+): CompilationDecision => ({
   priority: priorityFor(code),
   code,
   message,
@@ -199,20 +200,20 @@ const guidanceFor = (
 };
 
 interface CompiledLine {
-  recipe: MealPlanRecipe;
+  recipe: CompiledRecipe;
   line: RecipeIngredientLine;
 }
 
 /** Deterministically turn semantic extraction into the cart-facing plan. */
-export function compileShoppingPlan(
-  draft: MealPlanDraft,
-  suppliedOptions: MealPlanCompileOptions = {},
-): ShoppingPlan {
+export function compileRecipeCompilation(
+  draft: IngredientsAgentOutput,
+  suppliedOptions: ShoppingListCompileOptions = {},
+): RecipeCompilation {
   const options = { ...DEFAULT_OPTIONS, ...suppliedOptions };
   if (draft.recipes.length === 0) throw new Error("Meal plan must contain at least one recipe");
 
   const sourceNames = new Set<string>();
-  const compiledRecipes: MealPlanRecipe[] = draft.recipes.map((recipe) => {
+  const compiledRecipes: CompiledRecipe[] = draft.recipes.map((recipe) => {
     if (!recipe.sourceName.trim()) throw new Error("Recipe has no source name");
     if (sourceNames.has(recipe.sourceName)) throw new Error(`Duplicate recipe source: ${recipe.sourceName}`);
     sourceNames.add(recipe.sourceName);
@@ -270,7 +271,7 @@ export function compileShoppingPlan(
   }
 
   const purchaseIntents: PurchaseIntent[] = [];
-  const decisions: MealPlanDecision[] = [];
+  const decisions: CompilationDecision[] = [];
   for (const group of groups.values()) {
     const first = group[0];
     if (!first) continue;
@@ -359,19 +360,19 @@ export function compileShoppingPlan(
     }
   }
 
-  const plan: ShoppingPlan = {
+  const plan: RecipeCompilation = {
     contractVersion: 3,
     recipes: compiledRecipes,
     purchaseIntents,
     decisionLog: decisions,
   };
-  assertShoppingPlanIntegrity(plan);
+  assertRecipeCompilationIntegrity(plan);
   return plan;
 }
 
 /** Validate cross-reference invariants that JSON Schema cannot express. */
-export function assertShoppingPlanIntegrity(plan: ShoppingPlan): void {
-  if (plan.contractVersion !== 3) throw new Error(`Unsupported shopping-plan contract version: ${plan.contractVersion}`);
+export function assertRecipeCompilationIntegrity(plan: RecipeCompilation): void {
+  if (plan.contractVersion !== 3) throw new Error(`Unsupported recipe-compilation contract version: ${plan.contractVersion}`);
   const sourceNames = new Set<string>();
   const lines = new Map<string, RecipeIngredientLine>();
   for (const recipe of plan.recipes) {
@@ -409,4 +410,52 @@ export function assertShoppingPlanIntegrity(plan: ShoppingPlan): void {
       throw new Error("Decision references an unknown or unrelated ingredient source");
     }
   }
+}
+
+const compactContext = (values: readonly (string | null)[]): string | undefined => {
+  const unique = [...new Set(values.filter((value): value is string => value !== null && value.trim().length > 0))];
+  return unique.length > 0 ? unique.join(" ") : undefined;
+};
+
+/** Convert the source-preserving recipe compilation into the Cart Agent's input. */
+export function recipeCompilationToShoppingList(
+  compilation: RecipeCompilation,
+): ShoppingList {
+  assertRecipeCompilationIntegrity(compilation);
+  const ingredients = compilation.purchaseIntents
+    .filter(({ disposition }) => disposition === "buy")
+    .map((intent) => {
+      const preferences = [
+        `Preferred product identity: ${intent.primary.name}`,
+        ...intent.alternatives.map(({ name, guidance }) =>
+          `Acceptable alternative: ${name}. ${guidance}`,
+        ),
+      ];
+      const context = compactContext(intent.sourceLines.map(({ context }) => context));
+      return {
+        id: intent.id,
+        request: intent.primary.guidance,
+        preferences,
+        ...(context ? { context } : {}),
+      };
+    });
+  if (ingredients.length === 0) {
+    throw new Error("Ingredients Agent produced no items for the shopping list");
+  }
+  return {
+    recipes: [{
+      id: "ingredients-agent-list",
+      name: "Ingredients Agent shopping list",
+      servings: 1,
+      context: `Compiled from: ${compilation.recipes.map(({ sourceName }) => sourceName).join(", ")}`,
+      ingredients,
+    }],
+  };
+}
+
+export function compileShoppingList(
+  draft: IngredientsAgentOutput,
+  options: ShoppingListCompileOptions = {},
+): ShoppingList {
+  return recipeCompilationToShoppingList(compileRecipeCompilation(draft, options));
 }

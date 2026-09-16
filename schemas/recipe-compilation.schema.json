@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://whole-foods-cart.local/schemas/shopping-plan.schema.json",
-  "title": "Whole Foods meal-plan compiler output",
-  "description": "A source-preserving, purchase-oriented plan for autonomous cart execution.",
+  "$id": "https://whole-foods-cart.local/schemas/recipe-compilation.schema.json",
+  "title": "Ingredients Agent recipe compilation",
+  "description": "Internal source-preserving compilation used to derive a Cart Agent shopping list.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contractVersion", "recipes", "purchaseIntents", "decisionLog"],

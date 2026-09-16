@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   CartStateVerificationError,
-  cartTextContainsSelection,
   collectCartPageObservation,
   createPlaywrightCartPageAdapter,
   computeCartDelta,
@@ -52,7 +51,36 @@ class FakeDomElement {
         (element) => element.getAttribute("aria-label") === "Enter Quantity",
       );
     }
+    if (selector === "a[href]") {
+      return descendants.filter(
+        (element) =>
+          element.tagName.toLowerCase() === "a" &&
+          element.getAttribute("href") !== null,
+      );
+    }
+    if (selector === 'a[href*="/grocery/product/"]') {
+      return descendants.filter(
+        (element) =>
+          element.tagName.toLowerCase() === "a" &&
+          element.getAttribute("href")?.includes("/grocery/product/") === true,
+      );
+    }
     return descendants;
+  }
+
+  querySelector(selector: string): FakeDomElement | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  closest(selector: string): FakeDomElement | null {
+    if (selector !== "a[href]") return null;
+    if (
+      this.tagName.toLowerCase() === "a" &&
+      this.getAttribute("href") !== null
+    ) {
+      return this;
+    }
+    return this.parentElement?.closest(selector) ?? null;
   }
 }
 
@@ -64,7 +92,13 @@ class FakeDocument {
   ) {}
 
   querySelectorAll(selector: string): FakeDomElement[] {
-    return selector.includes("cart-item-image-title-container") ? this.titles : [];
+    if (selector.includes("cart-item-image-title-container")) return this.titles;
+    if (selector === 'a[href*="/grocery/product/"]') {
+      return this.titles
+        .map((title) => title.closest("a[href]"))
+        .filter((link): link is FakeDomElement => link !== null);
+    }
+    return [];
   }
 
   querySelector(selector: string): FakeDomElement | null {
@@ -92,7 +126,10 @@ function splitCartFixture(quantity: string | null): FakeDocument {
     "Organic bananas",
     { class: "cart-item-image-title-container" },
   );
-  const group = new FakeDomElement("section", "Organic bananas $2.99").append(title);
+  const productLink = new FakeDomElement("a", "Organic bananas", {
+    href: "/grocery/product/organic-bananas-b000000001",
+  }).append(title);
+  const group = new FakeDomElement("section", "Organic bananas $2.99").append(productLink);
   if (quantity !== null) {
     group.append(new FakeDomElement("input", "", {
       type: "text",
@@ -118,6 +155,7 @@ describe("cart-state parsing", () => {
     );
     expect(observation.rows).toEqual([{
       productName: "Organic bananas",
+      productId: "B000000001",
       quantity: "2",
       text: "Organic bananas $2.99",
     }]);
@@ -132,7 +170,7 @@ describe("cart-state parsing", () => {
     expect(observation.rows).toEqual([]);
     expect(observation.bodyText).toContain("Organic bananas");
     expect(observation.extractionStatus).toBe("degraded");
-    expect(observation.extractionDiagnostic).toContain("exactly one quantity control");
+    expect(observation.extractionDiagnostic).toContain("product rows with quantity controls");
   });
 
   it("returns a degraded cart snapshot instead of blocking the run", async () => {
@@ -144,7 +182,7 @@ describe("cart-state parsing", () => {
     await expect(inspectCartState(adapter)).resolves.toMatchObject({
       items: [],
       extractionStatus: "degraded",
-      extractionDiagnostic: expect.stringContaining("exactly one quantity control"),
+      extractionDiagnostic: expect.stringContaining("product rows with quantity controls"),
     });
   });
 
@@ -169,15 +207,39 @@ describe("cart-state parsing", () => {
     expect(currentUrl).toContain("/grocery/cart");
   });
 
+  it("waits for client-rendered cart content before evaluating rows", async () => {
+    const events: string[] = [];
+    const page = {
+      url: () => "https://www.wholefoodsmarket.com/grocery/cart",
+      waitForFunction: async () => {
+        events.push("cart-ready");
+      },
+      evaluate: async () => {
+        events.push("evaluate");
+        return "observed";
+      },
+      goto: async () => undefined,
+    } as unknown as Parameters<typeof createPlaywrightCartPageAdapter>[0];
+    const adapter = createPlaywrightCartPageAdapter(page);
+
+    await expect(adapter.evaluate(() => "ignored")).resolves.toBe("observed");
+    expect(events).toEqual(["cart-ready", "evaluate"]);
+  });
+
   it("accepts positive integer quantities and labelled quantities", () => {
     expect(parseCartQuantity(2)).toBe(2);
     expect(parseCartQuantity("Qty: 3")).toBe(3);
     expect(parseCartQuantity("quantity is 4")).toBe(4);
   });
 
-  it("rejects ambiguous, zero, and price-like quantities", () => {
+  it("accepts positive decimal quantities used for weighted products", () => {
+    expect(parseCartQuantity(0.25)).toBe(0.25);
+    expect(parseCartQuantity("0.25")).toBe(0.25);
+    expect(parseCartQuantity("Quantity: 1.5")).toBe(1.5);
+  });
+
+  it("rejects ambiguous and non-positive quantities", () => {
     expect(parseCartQuantity(0)).toBeNull();
-    expect(parseCartQuantity("2.99")).toBeNull();
     expect(parseCartQuantity("2 items, 3 substitutions")).toBeNull();
     expect(parseCartQuantity("quantity: 0")).toBeNull();
   });
@@ -206,25 +268,21 @@ describe("cart-state parsing", () => {
     ]);
     expect(getTotalItemCount(items)).toBe(3);
   });
+
+  it("counts a weighted cart row as one cart item", () => {
+    const items = parseCartItemRows([
+      { productName: "Ginger root", quantity: "0.25" },
+      { productName: "Soy sauce", quantity: "2" },
+    ]);
+    expect(items).toEqual([
+      { productName: "Ginger root", quantity: 0.25 },
+      { productName: "Soy sauce", quantity: 2 },
+    ]);
+    expect(getTotalItemCount(items)).toBe(3);
+  });
 });
 
 describe("cart-state delta", () => {
-  it("matches an agent-reported product and quantity in visible cart text", () => {
-    const text = [
-      "Your cart",
-      "365 by Whole Foods Market Boneless Skinless Chicken Thighs",
-      "$9.34",
-      "Current quantity: 1",
-    ].join("\n");
-    expect(cartTextContainsSelection(
-      text,
-      "365 by Whole Foods Market Boneless Skinless Chicken Thighs",
-      1,
-    )).toBe(true);
-    expect(cartTextContainsSelection(text, "Chicken Breast", 1)).toBe(false);
-    expect(cartTextContainsSelection(text, "Chicken Thighs", 2)).toBe(false);
-  });
-
   it("preserves baseline items and returns only additions", () => {
     expect(computeCartDelta(
       [{ productName: "Milk", quantity: 1 }],
@@ -233,28 +291,6 @@ describe("cart-state delta", () => {
         { productName: "Eggs", quantity: 2 },
       ],
     )).toEqual([{ productName: "Eggs", quantity: 2 }]);
-  });
-
-  it("keeps quantity evidence local to the matched cart item", () => {
-    const text = [
-      "Organic Apples",
-      "Current quantity: 1",
-      "Bananas",
-      "Current quantity: 2",
-    ].join("\n");
-    expect(cartTextContainsSelection(text, "Organic Apples", 1)).toBe(true);
-    expect(cartTextContainsSelection(text, "Organic Apples", 2)).toBe(false);
-  });
-
-  it("does not treat a package-size number as the cart quantity", () => {
-    const text = [
-      "Organic Apples",
-      "3 lb bag",
-      "$5.99",
-      "Bananas",
-      "Current quantity: 1",
-    ].join("\n");
-    expect(cartTextContainsSelection(text, "Organic Apples", 3)).toBe(false);
   });
 
   it("represents a quantity increase by its positive difference", () => {

@@ -4,10 +4,10 @@ import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 
 const schemaPath = fileURLToPath(
-  new URL("../schemas/ingredient-result.schema.json", import.meta.url),
+  new URL("../schemas/cart-agent-result.schema.json", import.meta.url),
 );
 const promptPath = fileURLToPath(
-  new URL("../prompts/ingredient-agent.md", import.meta.url),
+  new URL("../prompts/cart-agent.md", import.meta.url),
 );
 
 const readSchema = (): Record<string, unknown> =>
@@ -19,6 +19,7 @@ const base = {
   ingredientId: "chicken",
   requested: "about 1.5 lb boneless skinless chicken thighs",
   productName: "365 by Whole Foods Market Boneless Skinless Chicken Thighs",
+  productId: "B000000001",
   packageSize: "1.5 lb",
   quantity: 1,
   price: "$12.99",
@@ -43,6 +44,7 @@ const validResults = {
     ingredientId: "fresh-tarragon",
     requested: "2 tablespoons fresh tarragon",
     productName: null,
+    productId: null,
     packageSize: null,
     quantity: 0,
     price: null,
@@ -56,6 +58,7 @@ const validResults = {
     ingredientId: "milk",
     requested: "1 cup whole milk",
     productName: null,
+    productId: null,
     packageSize: null,
     quantity: 0,
     price: null,
@@ -80,7 +83,7 @@ const expectInvalid = (value: unknown): void => {
   expect(compileValidator()(value)).toBe(false);
 };
 
-describe("ingredient result schema", () => {
+describe("Cart Agent result schema", () => {
   it.each(Object.entries(validResults))("accepts a valid %s result", (_name, result) => {
     expectValid(result);
   });
@@ -94,7 +97,7 @@ describe("ingredient result schema", () => {
   });
 });
 
-describe("ingredient-agent prompt contract", () => {
+describe("Cart Agent prompt contract", () => {
   it("requires one ingredient and preserves recipe/cart context", () => {
     const prompt = readPrompt();
     expect(prompt).toMatch(/exactly one|one ingredient at a time/i);
@@ -117,7 +120,7 @@ describe("ingredient-agent prompt contract", () => {
     expect(prompt).toMatch(/intermediate browser state/i);
     expect(prompt).toMatch(/on-page confirmation/i);
     expect(prompt).toMatch(/do not navigate to the cart/i);
-    expect(prompt).toMatch(/outer runner[\s\S]*single deterministic cart check/i);
+    expect(prompt).toMatch(/deterministic shell[\s\S]*single final cart check/i);
     expect(prompt).toMatch(/do not navigate back to a homepage/i);
   });
 
@@ -135,6 +138,7 @@ describe("ingredient-agent prompt contract", () => {
       "requested",
       "status",
       "productName",
+      "productId",
       "packageSize",
       "quantity",
       "price",

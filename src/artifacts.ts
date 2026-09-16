@@ -27,7 +27,7 @@ const sortKeys = (value: unknown): unknown => {
   return value;
 };
 
-export const canonicalRequest = (value: unknown): string =>
+export const canonicalShoppingList = (value: unknown): string =>
   `${JSON.stringify(sortKeys(value), null, 2)}\n`;
 
 export function createRunPaths(
@@ -43,7 +43,7 @@ export function createRunPaths(
     kind,
     runId,
     runDir,
-    requestPath: join(runDir, "request.json"),
+    shoppingListPath: join(runDir, "shopping-list.json"),
     reportPath: join(runDir, "report.json"),
     eventsPath: join(runDir, "codex-events.jsonl"),
     stderrPath: join(runDir, "codex-stderr.log"),
@@ -51,7 +51,7 @@ export function createRunPaths(
   };
 }
 
-export function writeRequestSnapshot(source: string, destination: string): void {
+export function writeShoppingListSnapshot(source: string, destination: string): void {
   cpSync(source, destination, { errorOnExist: true });
   chmodSync(destination, 0o600);
 }
@@ -92,7 +92,7 @@ export function writeRunMetadata(
   paths: RunPaths,
   requestSource: string,
   requestSha256: string,
-  modelSettings: { model: string; reasoningEffort: string },
+  modelSettings: Record<string, string>,
 ): void {
   writeFileSync(
     join(paths.runDir, "metadata.json"),

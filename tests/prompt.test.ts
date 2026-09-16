@@ -3,20 +3,19 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   renderAttachmentPrompt,
-  renderAuthPrompt,
-  renderIngredientPrompt,
-  renderMealPlanCompilerPrompt,
+  renderCartAgentPrompt,
+  renderIngredientsAgentPrompt,
   renderPrompt,
 } from "../src/prompt.js";
-import type { IngredientTask } from "../src/ingredient-runner.js";
-import type { CartReport, GroceryRequest } from "../src/types.js";
+import type { CartAgentTask } from "../src/cart-agent.js";
+import type { CartReport, ShoppingList } from "../src/types.js";
 
 const fixture = (name: string) =>
   fileURLToPath(new URL(`fixtures/${name}`, import.meta.url));
 
 const request = JSON.parse(
-  readFileSync(fixture("valid-request.json"), "utf8"),
-) as GroceryRequest;
+  readFileSync(fixture("valid-shopping-list.json"), "utf8"),
+) as ShoppingList;
 
 const prior = JSON.parse(
   readFileSync(fixture("valid-report.json"), "utf8"),
@@ -59,9 +58,9 @@ describe("cart prompt", () => {
     expect(prompt).toContain("click the resulting Add to Cart");
     expect(prompt).toContain("A quantity selector by itself is not a verified");
     expect(prompt).toMatch(/Do not\s+click the location control/);
-    expect(prompt).toContain("If 43214 appears anywhere in the page");
-    expect(prompt).toMatch(/cart may still label its\s+store block "Pickup Location"/);
-    expect(prompt).toMatch(/report delivery as confirmed even if the cart's\s+store/);
+    expect(prompt).not.toMatch(/\b43214\b/);
+    expect(prompt).toMatch(/generic cart label such as "Pickup Location" does not\s+override observed delivery mode/);
+    expect(prompt).toMatch(/Report delivery as confirmed from observed delivery mode, without requiring\s+a visible address string/);
     expect(prompt).toContain("PREVIOUS REPORT FOR CONTROLLED RERUN");
   });
 
@@ -87,9 +86,9 @@ describe("cart prompt", () => {
   });
 });
 
-describe("ingredient prompt", () => {
+describe("Cart Agent prompt", () => {
   it("scopes each agent invocation to one ingredient and carries cart context", () => {
-    const task: IngredientTask = {
+    const task: CartAgentTask = {
       ingredient: {
         id: "chicken",
         request: "about 1.5 lb chicken thighs",
@@ -102,7 +101,7 @@ describe("ingredient prompt", () => {
         context: "Quick weeknight dish",
       }],
     };
-    const prompt = renderIngredientPrompt({
+    const prompt = renderCartAgentPrompt({
       task,
       deliveryMode: "delivery",
       cartContext: {
@@ -117,26 +116,19 @@ describe("ingredient prompt", () => {
     expect(prompt).toContain("baselineItems");
     expect(prompt).toContain("Do not open a location picker");
     expect(prompt).toContain("BROWSER OUTPUT DIRECTORY:");
-  });
-});
-
-describe("auth-only prompt", () => {
-  it("allows only non-mutating auth and storefront checks", () => {
-    const prompt = renderAuthPrompt({
-      deliveryMode: "delivery",
-      browserOutputDir: "/repo/runs/id/browser",
-    });
-    expect(prompt).toContain("Confirm that the Whole Foods Market account is authenticated");
-    expect(prompt).toContain("Use the current controlled page on `www.wholefoodsmarket.com`");
-    expect(prompt).toMatch(/Do not\s+create tabs/);
-    expect(prompt).toMatch(/Do\s+not click the location control/);
-    expect(prompt).toContain("If 43214 appears anywhere in the page");
-    expect(prompt).toContain("DELIVERY MODE: delivery");
-    expect(prompt).toContain("/repo/runs/id/browser/auth-state.png");
-    expect(prompt).toContain("Do not include personal details");
-    expect(prompt).toContain("NEVER open or enter checkout");
-    expect(prompt).not.toContain("FOR EACH INGREDIENT");
-    expect(prompt).not.toContain("GROCERY REQUEST");
+    expect(prompt).toContain("browser_evaluate");
+    expect(prompt).toContain("inspect the visible results once with a compact `browser_evaluate` query");
+    expect(prompt).toContain("browser_find");
+    expect(prompt).toContain("browser_snapshot");
+    expect(prompt).toContain("only for recovery");
+    expect(prompt).toMatch(/Do not spend a\s+separate call on a health check/);
+    expect(prompt).toMatch(/do not repeatedly find the same control/);
+    expect(prompt).toMatch(/A `browser_wait_for` is for a concrete loading state/);
+    expect(prompt).toContain("add the best candidate directly from its search-result card");
+    expect(prompt).toMatch(/Open\s+the product detail page only when the search-result card lacks information/);
+    expect(prompt).not.toContain("choose and open the best candidate");
+    expect(prompt).not.toContain("Start with a small `browser_evaluate` health query");
+    expect(prompt).not.toContain("Start by taking a fresh browser snapshot");
   });
 });
 
@@ -156,9 +148,9 @@ describe("harmless attachment prompt", () => {
   });
 });
 
-describe("meal-plan compiler prompt", () => {
+describe("Ingredients Agent prompt", () => {
   it("delimits every raw recipe without altering its contents", () => {
-    const prompt = renderMealPlanCompilerPrompt({
+    const prompt = renderIngredientsAgentPrompt({
       recipeDocuments: [
         { sourceName: "recipe.md", text: "Ingredients\n2 apples" },
         { sourceName: "other.md", text: "Ingredients\n1 lemon" },

@@ -1,7 +1,7 @@
 import type {
   GroceryIngredient,
   GroceryRecipe,
-  GroceryRequest,
+  ShoppingList,
   CartAgentResult,
 } from "./types.js";
 
@@ -16,7 +16,7 @@ export interface CartAgentTask {
 }
 
 export function flattenCartAgentTasks(
-  request: GroceryRequest,
+  request: ShoppingList,
 ): CartAgentTask[] {
   return request.recipes.flatMap((recipe) =>
     recipe.ingredients.map((ingredient) => ({
@@ -70,7 +70,7 @@ const errorMessage = (error: unknown): string =>
 
 const invalidResultReason = (result: CartAgentResult): string | null => {
   if (!result || typeof result !== "object") {
-    return "Agent returned an invalid result";
+    return "Cart Agent returned an invalid result";
   }
   if (
     result.status !== "added" &&
@@ -78,38 +78,50 @@ const invalidResultReason = (result: CartAgentResult): string | null => {
     result.status !== "skipped" &&
     result.status !== "failed"
   ) {
-    return "Agent returned an unsupported status";
+    return "Cart Agent returned an unsupported status";
   }
   if (!isNonEmptyString(result.ingredientId) || !isNonEmptyString(result.requested)) {
-    return "Agent result did not identify the requested ingredient";
+    return "Cart Agent result did not identify the requested ingredient";
   }
   if (!isNonEmptyString(result.rationale)) {
-    return "Agent returned no rationale";
+    return "Cart Agent returned no rationale";
   }
   if (
     (result.status === "skipped" || result.status === "failed") &&
     !isNonEmptyString(result.failureReason)
   ) {
-    return `Agent returned ${result.status} without a failure reason`;
+    return `Cart Agent returned ${result.status} without a failure reason`;
   }
   if (
-    (result.status === "added" || result.status === "already_present") &&
+    result.status === "added" &&
     (!isNonEmptyString(result.productName) ||
+      !isNonEmptyString(result.productId) ||
       !isNonEmptyString(result.packageSize) ||
       !Number.isSafeInteger(result.quantity) ||
       result.quantity < 1 ||
       result.failureReason !== null)
   ) {
-    return `Agent returned ${result.status} without a complete product result`;
+    return "Cart Agent returned added without a complete product result";
+  }
+  if (
+    result.status === "already_present" &&
+    (!isNonEmptyString(result.productName) ||
+      !isNonEmptyString(result.productId) ||
+      !Number.isSafeInteger(result.quantity) ||
+      result.quantity < 1 ||
+      result.failureReason !== null)
+  ) {
+    return "Cart Agent returned already_present without verifiable cart identity and quantity";
   }
   if (
     (result.status === "skipped" || result.status === "failed") &&
     (result.productName !== null ||
+      result.productId !== null ||
       result.packageSize !== null ||
       result.quantity !== 0 ||
       result.price !== null)
   ) {
-    return `Agent returned ${result.status} with product details`;
+    return `Cart Agent returned ${result.status} with product details`;
   }
   return null;
 };
@@ -136,6 +148,7 @@ const failedResult = (
   requested: task.ingredient.request,
   status: "failed",
   productName: null,
+  productId: null,
   packageSize: null,
   quantity: 0,
   price: null,
@@ -190,14 +203,19 @@ export async function runCartAgentTasks<TSession>(
       result &&
       typeof result === "object" &&
       result.ingredientId !== task.ingredient.id
-        ? `Agent returned ${result.ingredientId} for ${task.ingredient.id}`
+        ? `Cart Agent returned ${result.ingredientId} for ${task.ingredient.id}`
         : invalidResultReason(result);
     if (invalidReason !== null) {
       result = failedResult(task, invalidReason);
     }
 
     results.push({ task, result });
+    if (result.status === "failed") {
+      stopped = true;
+      stopReason = result.failureReason ?? `Cart Agent failed for ${task.ingredient.id}`;
+    }
     await publishProgress();
+    if (stopped) break;
   }
 
   return makeProgress(options.tasks.length, results, stopped, stopReason);

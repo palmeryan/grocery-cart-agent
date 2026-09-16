@@ -21,6 +21,7 @@ export interface CartPageObservation {
 
 export interface CartItemRow {
   productName?: unknown;
+  productId?: unknown;
   quantity?: unknown;
   text?: unknown;
 }
@@ -67,23 +68,27 @@ function asTrimmedText(value: unknown): string | null {
   return text.length > 0 ? text : null;
 }
 
-/** Parse only unambiguous positive integer quantities; prices and decimals are rejected. */
+/** Parse a positive cart-control quantity, including weight increments such as 0.25 lb. */
 export function parseCartQuantity(value: unknown): number | null {
   if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : null;
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
   const text = asTrimmedText(value);
   if (text === null) return null;
 
-  if (/^\d+$/.test(text)) {
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
     const quantity = Number(text);
-    return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null;
+    return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
   }
 
-  const labelled = [...text.matchAll(/\b(?:qty|quantity)\s*(?::|=|is)?\s*(\d+)\b/gi)];
+  const labelled = [
+    ...text.matchAll(
+      /\b(?:qty|quantity)\s*(?::|=|is)?\s*(\d+(?:\.\d+)?)\b/gi,
+    ),
+  ];
   if (labelled.length !== 1) return null;
   const quantity = Number(labelled[0]?.[1]);
-  return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : null;
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
 }
 
 /** Product names are kept human-readable but normalized for safe comparisons. */
@@ -94,8 +99,18 @@ export function parseCartProductName(value: unknown): string | null {
   return text;
 }
 
-function productKey(productName: string): string {
-  return productName.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+/** Whole Foods product links currently carry the underlying 10-character catalog ID. */
+export function parseCartProductId(value: unknown): string | null {
+  const text = asTrimmedText(value);
+  if (text === null || !/^[a-z0-9]{10}$/i.test(text)) return null;
+  return text.toLocaleUpperCase();
+}
+
+function productKey(productName: string, productId?: string): string {
+  const parsedId = parseCartProductId(productId);
+  return parsedId === null
+    ? `name:${productName.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase()}`
+    : `id:${parsedId}`;
 }
 
 function aggregateItems(items: readonly CartItemSnapshot[]): Map<string, CartItemSnapshot> {
@@ -109,10 +124,12 @@ function aggregateItems(items: readonly CartItemSnapshot[]): Map<string, CartIte
         "item_extraction_unreliable",
       );
     }
-    const key = productKey(productName);
+    const productId = parseCartProductId(item.productId) ?? undefined;
+    const key = productKey(productName, productId);
     const previous = result.get(key);
     result.set(key, {
       productName: previous?.productName ?? productName,
+      ...(productId ? { productId } : {}),
       quantity: (previous?.quantity ?? 0) + quantity,
     });
   }
@@ -129,6 +146,7 @@ function aggregateItems(items: readonly CartItemSnapshot[]): Map<string, CartIte
 export function parseCartItemRows(rows: readonly CartItemRow[]): CartItemSnapshot[] {
   return rows.map((row) => {
     const productName = parseCartProductName(row.productName);
+    const productId = parseCartProductId(row.productId) ?? undefined;
     const quantity = parseCartQuantity(row.quantity) ?? parseCartQuantity(row.text);
     if (productName === null || quantity === null) {
       throw new CartStateVerificationError(
@@ -136,7 +154,7 @@ export function parseCartItemRows(rows: readonly CartItemRow[]): CartItemSnapsho
         "item_extraction_unreliable",
       );
     }
-    return { productName, quantity };
+    return { productName, ...(productId ? { productId } : {}), quantity };
   });
 }
 
@@ -144,60 +162,10 @@ export function parseCartItemRows(rows: readonly CartItemRow[]): CartItemSnapsho
 export const parseCartItemSnapshots = parseCartItemRows;
 
 export function getTotalItemCount(items: readonly CartItemSnapshot[]): number {
-  return [...aggregateItems(items).values()].reduce((total, item) => total + item.quantity, 0);
-}
-
-const escapeRegExp = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const normalizedSearchLines = (value: string): string[] =>
-  value
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter((line) => line.length > 0);
-
-/**
- * Match an agent-reported item against visible cart text. This is deliberately
- * a final read-only check: the agent chooses the product, while the harness
- * confirms that the reported name and quantity are visible in the cart.
- */
-export function cartTextContainsSelection(
-  bodyText: string,
-  productName: string,
-  quantity: number,
-): boolean {
-  if (!productName.trim() || !Number.isSafeInteger(quantity) || quantity < 1) {
-    return false;
-  }
-  const lines = normalizedSearchLines(bodyText);
-  const namePattern = productName
-    .trim()
-    .split(/\s+/)
-    .map(escapeRegExp)
-    .join("\\s+");
-  const nameRegex = new RegExp(`(?:^|[^\\p{L}\\p{N}])${namePattern}(?=$|[^\\p{L}\\p{N}])`, "iu");
-  const quantityPattern = escapeRegExp(String(quantity));
-  const labelledQuantity = new RegExp(
-    `\\b(?:current\\s+)?(?:quantity|qty)\\s*[:=]?\\s*${quantityPattern}\\b`,
-    "i",
+  return [...aggregateItems(items).values()].reduce(
+    (total, item) => total + (Number.isSafeInteger(item.quantity) ? item.quantity : 1),
+    0,
   );
-  const itemCount = new RegExp(
-    `\\b${quantityPattern}\\b\\s*(?:item|items|quantity)\\b`,
-    "i",
-  );
-  const standaloneQuantity = new RegExp(`^\\s*${quantityPattern}\\s*$`, "i");
-
-  for (let index = 0; index < lines.length; index += 1) {
-    if (!nameRegex.test(lines[index] ?? "")) continue;
-    // Cart rows are normally represented by a few adjacent text lines. Keep
-    // the fallback local so a quantity from a different item cannot satisfy
-    // this result merely because it appears elsewhere on the page.
-    const nearbyLines = lines.slice(index, index + 3);
-    const nearbyText = nearbyLines.join(" ");
-    if (labelledQuantity.test(nearbyText) || itemCount.test(nearbyText)) return true;
-    if (nearbyLines.some((line) => standaloneQuantity.test(line))) return true;
-  }
-  return false;
 }
 
 /**
@@ -217,7 +185,11 @@ export function computeCartDelta(
     const previousQuantity = beforeByProduct.get(key)?.quantity ?? 0;
     const increase = finalItem.quantity - previousQuantity;
     if (increase > 0) {
-      delta.push({ productName: finalItem.productName, quantity: increase });
+      delta.push({
+        productName: finalItem.productName,
+        ...(finalItem.productId ? { productId: finalItem.productId } : {}),
+        quantity: increase,
+      });
     }
   }
   return delta;
@@ -257,21 +229,38 @@ export function collectCartPageObservation(): CartPageObservation {
   const bodyText = document.body?.innerText ?? "";
   const emptyState = /(?:your\s+)?cart\s+is\s+empty|no\s+items?\s+in\s+(?:your\s+)?cart/i.test(bodyText);
   const titleSelector = '[class*="cart-item-image-title-container" i]';
+  const productLinkSelector = 'a[href*="/grocery/product/"]';
   const quantityCandidateSelector = '[aria-label="Enter Quantity"]';
   const rows: CartItemRow[] = [];
   const diagnostics: string[] = [];
   const seenGroups = new Set<Element>();
   const titleNodes = document.querySelectorAll(titleSelector);
+  const productLinks = document.querySelectorAll(productLinkSelector);
+  const rowAnchors = productLinks.length > 0 ? productLinks : titleNodes;
 
-  for (const titleNode of titleNodes) {
+  for (const rowAnchor of rowAnchors) {
+    const titleNode = rowAnchor.querySelector(titleSelector) ?? rowAnchor;
     const productName =
       titleNode.textContent?.replace(/\s+/g, " ").trim() ||
       titleNode.getAttribute("aria-label") ||
       undefined;
+    const productLink =
+      rowAnchor.getAttribute("href") !== null
+        ? rowAnchor
+        : titleNode.closest("a[href]") ?? titleNode.querySelector("a[href]");
+    const productHref = productLink?.getAttribute("href") ?? "";
+    const productId =
+      [...productHref.matchAll(/(?:^|[-/])([a-z0-9]{10})(?=[/?#]|$)/gi)].at(-1)?.[1]
+        ?.toUpperCase();
     let group: Element | null = null;
     let control: Element | null = null;
 
-    for (let ancestor = titleNode.parentElement; ancestor !== null; ancestor = ancestor.parentElement) {
+    let depth = 0;
+    for (
+      let ancestor = rowAnchor.parentElement;
+      ancestor !== null && depth < 6;
+      ancestor = ancestor.parentElement, depth += 1
+    ) {
       const controls = ancestor.querySelectorAll(quantityCandidateSelector);
       if (controls.length === 1) {
         group = ancestor;
@@ -281,7 +270,6 @@ export function collectCartPageObservation(): CartPageObservation {
     }
 
     if (group === null || control === null) {
-      diagnostics.push("A product-title node had no ancestor with exactly one quantity control");
       continue;
     }
     // A nested title marker can point at the same item group; do not duplicate it.
@@ -309,12 +297,17 @@ export function collectCartPageObservation(): CartPageObservation {
       diagnostics.push("A product-title group was missing a product name or quantity value");
     }
     if (productName !== undefined || quantity !== undefined) {
-      rows.push({ productName, quantity, text: rowText });
+      rows.push({
+        productName,
+        ...(productId ? { productId } : {}),
+        quantity,
+        text: rowText,
+      });
     }
   }
 
-  if (titleNodes.length === 0 && !emptyState) {
-    diagnostics.push("The cart page did not expose any product-title nodes");
+  if (rows.length === 0 && !emptyState) {
+    diagnostics.push("The cart page did not expose any product rows with quantity controls");
   }
 
   const countElement = document.querySelector(
@@ -442,11 +435,28 @@ export async function inspectCartState(
 
 /** Adapt an already-connected Playwright Page; this function never launches a browser. */
 export function createPlaywrightCartPageAdapter(
-  page: Pick<Page, "url" | "evaluate" | "goto">,
+  page: Pick<Page, "url" | "evaluate" | "goto" | "waitForFunction">,
 ): CartPageAdapter {
   return {
     getUrl: () => page.url(),
-    evaluate: <T>(pageFunction: () => T) => page.evaluate(pageFunction),
+    evaluate: async <T>(pageFunction: () => T) => {
+      await page.waitForFunction(
+        () => {
+          const bodyText = document.body?.innerText ?? "";
+          return (
+            document.querySelector(
+              '[class*="cart-item-image-title-container" i]',
+            ) !== null ||
+            /(?:your\s+)?cart\s+is\s+empty|no\s+items?\s+in\s+(?:your\s+)?cart/i.test(
+              bodyText,
+            )
+          );
+        },
+        undefined,
+        { timeout: 15_000 },
+      );
+      return page.evaluate(pageFunction);
+    },
     navigate: async (url) => {
       let lastError: unknown;
       for (let attempt = 0; attempt < 2; attempt += 1) {

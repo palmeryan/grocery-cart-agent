@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  canonicalRequest,
+  canonicalShoppingList,
   createRunPaths,
   findPreviousReport,
   sha256,
@@ -59,7 +59,7 @@ describe("artifact paths", () => {
   it("hashes equivalent nested requests identically", () => {
     const a = { recipes: [{ name: "x", servings: 2 }] };
     const b = { recipes: [{ servings: 2, name: "x" }] };
-    expect(sha256(canonicalRequest(a))).toBe(sha256(canonicalRequest(b)));
+    expect(sha256(canonicalShoppingList(a))).toBe(sha256(canonicalShoppingList(b)));
   });
 });
 

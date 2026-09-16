@@ -10,6 +10,7 @@
     "requested",
     "status",
     "productName",
+    "productId",
     "packageSize",
     "quantity",
     "price",
@@ -25,6 +26,7 @@
       "enum": ["added", "already_present", "skipped", "failed"]
     },
     "productName": { "type": ["string", "null"] },
+    "productId": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9]{10}$" },
     "packageSize": { "type": ["string", "null"] },
     "quantity": { "type": "integer", "minimum": 0 },
     "price": { "type": ["string", "null"] },
