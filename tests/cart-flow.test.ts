@@ -24,7 +24,7 @@ describe("harness cart flow", () => {
       tasks: cartTasks(list), baseline: [],
       search: async (query) => [candidate(query === "rice" ? "B000000001" : "B000000002", query)],
       decide: async (_task, candidates) => ({ action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null }),
-      add: async (selected, _quantity, _option, before) => {
+      add: async (_task, selected, _quantity, _option, before) => {
         seenBefore.push([...before]);
         return { items: [...before, { asin: selected.id, quantity: 1 }],
           observedAt: "now", url: "https://www.wholefoodsmarket.com/api/cartcache", method: "POST", status: 200 };
@@ -81,5 +81,24 @@ describe("harness cart flow", () => {
     });
     expect(result.failure?.stage).toBe("decision");
     expect(result.failure?.mayHaveCommitted).toBe(false);
+  });
+
+  it("counts a weighted chooser decision and reports its resolved quantity", async () => {
+    const result = await runCartFlow({
+      tasks: cartTasks({ recipes: [{ ...list.recipes[0]!, ingredients: [list.recipes[0]!.ingredients[0]!] }] }),
+      baseline: [],
+      search: async () => [candidate("B000000001", "Chicken")],
+      decide: async () => ({ action: "select", candidateId: "B000000001", quantity: 2, option: null, reason: "initial" }),
+      add: async (_task, _candidate, _quantity, _option, _before, _cart, recordDecision) => {
+        recordDecision(25);
+        return {
+          snapshot: { items: [{ asin: "B000000001", quantity: 1.56 }], observedAt: "now", url: "https://www.wholefoodsmarket.com/api/cartcache", method: "POST", status: 200 },
+          quantity: 1,
+          reason: "One pack is estimated at 1.56 lb",
+        };
+      },
+    });
+    expect(result.results[0]).toMatchObject({ quantity: 1, rationale: "One pack is estimated at 1.56 lb" });
+    expect(result.timings[0]).toMatchObject({ modelCalls: 2 });
   });
 });

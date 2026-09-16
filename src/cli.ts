@@ -50,7 +50,7 @@ import {
 } from "./cart-state.js";
 import { acquireRunLock, type RunLock } from "./lock.js";
 import { guardShoppingNavigation } from "./wfm-navigation.js";
-import { addCandidate, searchProducts } from "./wfm-page.js";
+import { addCandidate, searchProducts, type QuantityOption } from "./wfm-page.js";
 import {
   buildCartReport,
   buildFailedCartReport,
@@ -70,6 +70,7 @@ import type {
   AttachmentReport,
   AuthReport,
   CartItemResult,
+  CartItemSnapshot,
   OwnedChromeSession,
   RunPaths,
   ShoppingList,
@@ -683,14 +684,14 @@ export async function runCli(
         removeNavigationGuard = await guardShoppingNavigation(context, (url) => { blockedNavigation = url; });
         cartNetworkObserver = new CartNetworkObserver(shoppingPage);
         const decisionAttempts = new Map<string, number>();
-        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, cart: CartInspectionResult["items"]) => {
+        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, cart: readonly CartItemSnapshot[], quantityOptions?: readonly QuantityOption[]) => {
           const itemDir = join(paths!.runDir, "cart-decision", task.ingredient.id);
           mkdirSync(itemDir, { recursive: true, mode: 0o700 });
           const attempt = (decisionAttempts.get(task.ingredient.id) ?? 0) + 1;
           decisionAttempts.set(task.ingredient.id, attempt);
           const outputPath = join(itemDir, `decision-${attempt}.json`);
           const invocation = buildDecisionInvocation({ rootDir, outputPath, schemaPath: join(rootDir, DECISION_SCHEMA_PATH), model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort });
-          const result = await runCodex({ executable: config.codexBin, args: invocation.args, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, context: task.ingredient.context ?? null }, recipeContext: task.recipeContext, candidates, currentCart: cart }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
+          const result = await runCodex({ executable: config.codexBin, args: invocation.args, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null }, recipeContext: task.recipeContext, candidates, currentCart: cart, ...(quantityOptions ? { quantityOptions } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
           if (result.exitCode !== 0 || result.timedOut) throw new Error("Cart decision Codex invocation failed");
           return parseAndValidateDecision(readFileSync(outputPath, "utf8"), candidates, cart);
         };
@@ -703,20 +704,40 @@ export async function runCli(
             return searchProducts(shoppingPage!, query);
           },
           decide,
-          add: async (candidate, quantity, option, before) => {
+          add: async (task, candidate, quantity, option, before, cart, recordAdditionalDecision) => {
             await cartNetworkObserver!.beginMutation(before);
             let clickError: unknown;
+            let selectedQuantity = quantity;
+            let weighted = false;
+            let weightedReason: string | null = null;
             try {
-              await addCandidate(shoppingPage!, candidate, quantity, option ?? undefined);
+              const added = await addCandidate(shoppingPage!, candidate, quantity, option ?? undefined, async (quantityOptions) => {
+                const started = Date.now();
+                let choice;
+                try {
+                  choice = await decide(task, [candidate], cart, quantityOptions);
+                } finally {
+                  recordAdditionalDecision(Date.now() - started);
+                }
+                if (choice.action !== "select" || choice.candidateId.toUpperCase() !== candidate.id.toUpperCase()) {
+                  throw new Error("Weighted quantity decision did not select the current candidate");
+                }
+                weightedReason = choice.reason;
+                selectedQuantity = choice.quantity;
+                weighted = true;
+                return choice.quantity;
+              });
+              selectedQuantity = added.quantity;
+              weighted = added.weighted;
             } catch (error) {
               clickError = error;
             }
             const outcome = await cartNetworkObserver!.waitForMutation({
               asin: candidate.id,
-              expectedQuantity: quantity === 1 ? "positive" : quantity,
+              expectedQuantity: weighted || selectedQuantity === 1 ? "positive" : selectedQuantity,
             });
             if (blockedNavigation) throw new Error(`Blocked shopping navigation: ${blockedNavigation}`);
-            if (outcome.status === "confirmed") return outcome.snapshot;
+            if (outcome.status === "confirmed") return { snapshot: outcome.snapshot, quantity: selectedQuantity, reason: weightedReason };
             writeFileSync(
               join(paths!.runDir, "cart-network-diagnostic.json"),
               `${JSON.stringify(outcome, null, 2)}\n`,

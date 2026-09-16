@@ -70,6 +70,19 @@ describe("WFM page adapter", () => {
     expect(await page.getByRole("button", { name: "Increase quantity" }).getAttribute("data-clicks")).toBe("2");
   });
 
+  it.skipIf(!runBrowserFixtures)("chooses a weighted option before the final Add", async () => {
+    await page.setContent(`<div><a href="/grocery/product/chicken-b0787whrnp"><h2>Chicken thighs</h2></a><button onclick="this.dataset.clicks=String(Number(this.dataset.clicks||0)+1);document.querySelector('[role=listbox]').hidden=false">Add to Cart</button><div role="listbox" aria-label="Select quantity" hidden><div role="option" onclick="this.parentElement.hidden=true">1 est. 1.56 lb</div><div role="option" onclick="this.parentElement.hidden=true">2 est. 3.12 lb</div></div></div>`);
+    await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
+    let observed = "";
+    const result = await addCandidate(page, { id: "b0787whrnp", productName: "Chicken thighs", packageSize: null, price: "$5.99", available: true, text: "$5.99/lb" }, 2, undefined, async (options) => {
+      observed = options.map(({ label }) => label).join(" | ");
+      return 1;
+    });
+    expect(observed).toContain("1 est. 1.56 lb");
+    expect(result).toEqual({ quantity: 1, weighted: true });
+    expect(await page.getByRole("button", { name: "Add to Cart" }).getAttribute("data-clicks")).toBe("2");
+  });
+
   it.skipIf(!runBrowserFixtures)("rejects stale IDs, unknown controls, and non-WFM pages", async () => {
     await page.setContent(`<div><a href="/grocery/product/one-b000000001"><h2>One</h2></a></div>`);
     await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));

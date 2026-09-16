@@ -9,6 +9,16 @@ export interface ProductCandidate {
   text: string;
 }
 
+export interface QuantityOption {
+  quantity: number;
+  label: string;
+}
+
+export interface AddCandidateResult {
+  quantity: number;
+  weighted: boolean;
+}
+
 export class WfmPageError extends Error {
   constructor(message: string) {
     super(message);
@@ -150,7 +160,8 @@ export async function addCandidate(
   candidate: ProductCandidate | string,
   quantity = 1,
   option?: string,
-): Promise<void> {
+  chooseWeightedQuantity?: (options: readonly QuantityOption[]) => Promise<number>,
+): Promise<AddCandidateResult> {
   ensureWfmPage(page, true);
   const id = typeof candidate === "string" ? candidate : candidate.id;
   safeId(id);
@@ -170,6 +181,30 @@ export async function addCandidate(
   const hasAdd = await add.count() > 0 && await add.isVisible().catch(() => false);
   if (hasAdd && hasQtyInput) await qtyInput.fill(String(quantity));
   if (hasAdd) await add.click();
+  const chooser = card.getByRole("listbox", { name: "Select quantity" });
+  let chooserVisible = await chooser.isVisible().catch(() => false);
+  if (!chooserVisible && /\/\s*(?:lb|pound)\b/i.test(typeof candidate === "string" ? "" : candidate.text)) {
+    chooserVisible = await chooser.waitFor({ state: "visible", timeout: 2_000 })
+      .then(() => true, () => false);
+  }
+  if (chooserVisible) {
+    if (!chooseWeightedQuantity) throw new UnknownControlError(`Weighted quantity chooser needs a decision for candidate ${id}`);
+    const options: QuantityOption[] = [];
+    const choices = chooser.getByRole("option");
+    for (let index = 0; index < await choices.count(); index += 1) {
+      const label = (await choices.nth(index).innerText()).replace(/\s+/g, " ").trim();
+      const count = Number(/^\d+/.exec(label)?.[0]);
+      if (Number.isSafeInteger(count) && count > 0) options.push({ quantity: count, label });
+    }
+    if (options.length === 0) throw new UnknownControlError(`No readable weighted quantity options for candidate ${id}`);
+    const selected = await chooseWeightedQuantity(options);
+    const selectedOption = options.find(({ quantity: count }) => count === selected);
+    if (!selectedOption) throw new UnknownControlError(`Unlisted weighted quantity ${selected} for candidate ${id}`);
+    await chooser.getByRole("option", { name: selectedOption.label, exact: true }).click();
+    await add.waitFor({ state: "visible", timeout: 5_000 });
+    await add.click();
+    return { quantity: selected, weighted: true };
+  }
   const increase = card.getByRole("button", { name: "Increase quantity" });
   if (!hasAdd && await increase.count() === 0) {
     throw new UnknownControlError(`No add or increase control for candidate ${id}`);
@@ -179,4 +214,5 @@ export async function addCandidate(
     await increase.waitFor({ state: "visible", timeout: 5_000 });
     await increase.click();
   }
+  return { quantity, weighted: false };
 }
