@@ -20,12 +20,10 @@ export interface PromptInput {
 
 export interface CartAgentPromptInput {
   task: CartAgentTask;
-  deliveryMode: "delivery";
   cartContext: {
     baselineItems: readonly CartItemSnapshot[];
     priorResults: readonly CartAgentResult[];
   };
-  browserOutputDir: string;
 }
 
 export interface IngredientsAgentPromptInput {
@@ -83,8 +81,6 @@ export function renderPrompt(input: PromptInput): string {
 export function renderCartAgentPrompt(input: CartAgentPromptInput): string {
   return [
     cartAgentTemplate.trim(),
-    `DELIVERY MODE: ${input.deliveryMode}`,
-    `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
     "CART AGENT TASK:",
     JSON.stringify(input.task, null, 2),
     "CART CONTEXT:",

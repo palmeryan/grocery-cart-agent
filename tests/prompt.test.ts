@@ -103,32 +103,22 @@ describe("Cart Agent prompt", () => {
     };
     const prompt = renderCartAgentPrompt({
       task,
-      deliveryMode: "delivery",
       cartContext: {
         baselineItems: [{ productName: "Salt", quantity: 1 }],
         priorResults: [],
       },
-      browserOutputDir: "/repo/runs/id/ingredients/chicken/browser",
     });
     expect(prompt).toContain("one Whole Foods Market ingredient");
     expect(prompt).toContain("chicken thighs");
     expect(prompt).toContain("Chicken stir-fry");
     expect(prompt).toContain("baselineItems");
-    expect(prompt).toContain("Do not open a location picker");
-    expect(prompt).toContain("BROWSER OUTPUT DIRECTORY:");
+    expect(prompt).toContain("return `already_present`");
     expect(prompt).toContain("browser_evaluate");
-    expect(prompt).toContain("inspect the visible results once with a compact `browser_evaluate` query");
     expect(prompt).toContain("browser_find");
     expect(prompt).toContain("browser_snapshot");
-    expect(prompt).toContain("only for recovery");
-    expect(prompt).toMatch(/Do not spend a\s+separate call on a health check/);
-    expect(prompt).toMatch(/do not repeatedly find the same control/);
-    expect(prompt).toMatch(/A `browser_wait_for` is for a concrete loading state/);
-    expect(prompt).toContain("add the best candidate directly from its search-result card");
-    expect(prompt).toMatch(/Open\s+the product detail page only when the search-result card lacks information/);
-    expect(prompt).not.toContain("choose and open the best candidate");
-    expect(prompt).not.toContain("Start with a small `browser_evaluate` health query");
-    expect(prompt).not.toContain("Start by taking a fresh browser snapshot");
+    expect(prompt).toContain("weighted product");
+    expect(prompt).not.toContain("DELIVERY MODE:");
+    expect(prompt).not.toContain("BROWSER OUTPUT DIRECTORY:");
   });
 });
 

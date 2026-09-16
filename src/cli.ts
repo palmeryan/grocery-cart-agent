@@ -38,6 +38,13 @@ import {
   runCodex,
 } from "./codex.js";
 import { loadConfig } from "./config.js";
+import {
+  CartNetworkObserver,
+  getSuccessfulFullCartPost,
+  reconcileCartAgentResult,
+  type CartNetworkItem,
+  type CartNetworkSnapshot,
+} from "./cart-network.js";
 import { runIngredientsAgent, type RecipeDocument } from "./ingredients-agent.js";
 import {
   createPlaywrightCartPageAdapter,
@@ -201,6 +208,62 @@ const prepareOwnedCartAgentPage = async (
   }
 };
 
+const attachOwnedCartNetworkObserver = async (
+  session: OwnedChromeSession,
+): Promise<{ observer: CartNetworkObserver; close: () => Promise<void> } | null> => {
+  if (session.remoteDebuggingPort === undefined) return null;
+  const connected = await connectToOwnedChrome(session.remoteDebuggingPort);
+  const context = connected.contexts()[0];
+  const page = context?.pages().find((candidate) => isWholeFoodsPage(candidate.url()));
+  if (!page) {
+    await connected.close().catch(() => undefined);
+    return null;
+  }
+  const observer = new CartNetworkObserver(page);
+  return {
+    observer,
+    close: async () => {
+      observer.dispose();
+      await connected.close().catch(() => undefined);
+    },
+  };
+};
+
+const snapshotFromInspection = (items: CartInspectionResult["items"]): CartNetworkItem[] =>
+  items.flatMap((item) => item.productId
+    ? [{ asin: item.productId.toUpperCase(), quantity: item.quantity }]
+    : []);
+
+const inspectionFromNetworkSnapshot = (
+  snapshot: CartNetworkSnapshot,
+  baselineItems: CartInspectionResult["items"],
+  results: readonly CartAgentResult[],
+): CartInspectionResult | null => {
+  const names = new Map<string, string>();
+  for (const item of baselineItems) {
+    if (item.productId) names.set(item.productId.toUpperCase(), item.productName);
+  }
+  for (const result of results) {
+    if (result.productId && result.productName) {
+      names.set(result.productId.toUpperCase(), result.productName);
+    }
+  }
+  const items = snapshot.items.map(({ asin, quantity }) => {
+    const productName = names.get(asin.toUpperCase());
+    return productName ? { productName, productId: asin, quantity } : null;
+  });
+  if (items.some((item) => item === null)) return null;
+  const verifiedItems = items.filter((item): item is NonNullable<typeof item> => item !== null);
+  return {
+    items: verifiedItems,
+    totalItemCount: verifiedItems.reduce((count, item) => count + item.quantity, 0),
+    url: snapshot.url,
+    bodyText: "Cart verified from successful full-cart network response.",
+    extractionStatus: "complete",
+    extractionDiagnostic: null,
+  };
+};
+
 export const classifyCartAgentUrl = (value: string): CartAgentPageSafety => {
   let url: URL;
   try {
@@ -216,8 +279,7 @@ export const classifyCartAgentUrl = (value: string): CartAgentPageSafety => {
   const checkoutVisited = /(?:checkout|\/gp\/buy|\/order)/i.test(url.pathname);
   const settingsChanged = /(?:account|settings|address|payment)/i.test(url.pathname);
   const wholeFoods = /(^|\.)wholefoodsmarket\.com$/i.test(url.hostname);
-  const cartPage = /(?:^|\/)cart(?:\/|$)/i.test(url.pathname);
-  const safe = wholeFoods && !checkoutVisited && !settingsChanged && !cartPage;
+  const safe = wholeFoods && !checkoutVisited && !settingsChanged;
   return {
     safe,
     checkoutVisited,
@@ -228,9 +290,7 @@ export const classifyCartAgentUrl = (value: string): CartAgentPageSafety => {
         ? `Cart Agent crossed the checkout/order boundary: ${value}`
         : settingsChanged
           ? `Cart Agent crossed the account/settings boundary: ${value}`
-          : cartPage
-            ? `Cart Agent navigated to the cart instead of leaving the shared browser in the shopping flow: ${value}`
-            : `Cart Agent left the Whole Foods storefront: ${value}`,
+          : `Cart Agent left the Whole Foods storefront: ${value}`,
   };
 };
 
@@ -332,6 +392,7 @@ export async function runCli(
 
   let lock: RunLock | undefined;
   let browser: OwnedChromeSession | undefined;
+  let cartNetworkSession: { observer: CartNetworkObserver; close: () => Promise<void> } | null = null;
   let paths: RunPaths | undefined;
   let exitCode = 2;
   let lockAcquired = false;
@@ -355,6 +416,10 @@ export async function runCli(
     if (lockAcquired && lock) {
       const heldLock = lock;
       try {
+        if (cartNetworkSession) {
+          await cartNetworkSession.close();
+          cartNetworkSession = null;
+        }
         if (invocationAttempted && paths) {
           try {
             secure(paths.reportPath);
@@ -745,11 +810,24 @@ export async function runCli(
       return await finish();
     }
 
+    if (!dependencies.inspectCart) {
+      try {
+        cartNetworkSession = await attachOwnedCartNetworkObserver(browser);
+      } catch (error) {
+        console.warn(
+          `Cart network observer unavailable; cart-page verification will be used: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const prepareCartAgentPage =
       dependencies.prepareCartAgentPage ??
       (dependencies.inspectCart ? async () => undefined : prepareOwnedCartAgentPage);
     try {
       await prepareCartAgentPage(browser);
+      // The observer is attached before search-page navigation, so this drain
+      // records cartcache responses for diagnosis without assuming they provide
+      // a complete baseline. Only successful cart POSTs are authoritative.
+      await cartNetworkSession?.observer.drain();
     } catch (error) {
       leaveBrowserOpen = true;
       const reason =
@@ -837,6 +915,15 @@ export async function runCli(
 
     let observedCheckout = false;
     let observedSettingsChange = false;
+    let latestNetworkSnapshot: CartNetworkSnapshot | null = null;
+    let networkReconciliationsComplete = true;
+    let networkDiagnostic: string | null = null;
+    const baselineNetworkItems = baseline.items.length === 0
+      ? []
+      : baseline.items.every((item) => Boolean(item.productId))
+        ? snapshotFromInspection(baseline.items)
+        : null;
+    let reconciledResults: CartAgentResult[] = [];
     const progress = await runCartAgentTasks({
       tasks,
       session: browser,
@@ -850,12 +937,10 @@ export async function runCli(
         const resultPath = join(attemptDir, "result.json");
         const prompt = renderCartAgentPrompt({
           task,
-          deliveryMode: config.deliveryMode,
           cartContext: {
             baselineItems: baseline.items,
             priorResults,
           },
-          browserOutputDir: join(attemptDir, "browser"),
         });
         let result: CartAgentResult | undefined;
         let invocationError: unknown;
@@ -884,11 +969,47 @@ export async function runCli(
         const pageSafety = await inspectAgentPage(browser!);
         observedCheckout = observedCheckout || pageSafety.checkoutVisited;
         observedSettingsChange = observedSettingsChange || pageSafety.settingsChanged;
+        const responseRecords = cartNetworkSession
+          ? result?.status === "added"
+            ? await cartNetworkSession.observer.waitForFullCartPost()
+            : await cartNetworkSession.observer.drain()
+          : [];
+        const responseSnapshot = getSuccessfulFullCartPost(responseRecords);
+        if (invocationError !== undefined || !pageSafety.safe || !result) {
+          if (cartNetworkSession) {
+            networkReconciliationsComplete = false;
+            networkDiagnostic = "A Cart Agent invocation did not produce a safe, valid result; its cart effects cannot be reconciled.";
+            if (responseSnapshot) latestNetworkSnapshot = responseSnapshot;
+          }
+        }
         if (!pageSafety.safe) {
           throw new Error(pageSafety.failureReason ?? "Cart Agent left an unsafe browser state");
         }
         if (invocationError !== undefined) throw invocationError;
         if (!result) throw new Error("Cart Agent returned no result");
+        reconciledResults = [...priorResults, result];
+        if (cartNetworkSession) {
+          if (responseSnapshot) {
+            const before = latestNetworkSnapshot?.items ?? baselineNetworkItems;
+            if (before === null) {
+              networkReconciliationsComplete = false;
+              networkDiagnostic = "Baseline cart items did not all include product IDs, so the network cart delta cannot be reconciled.";
+            } else {
+              const reconciliation = reconcileCartAgentResult(before, responseSnapshot, result);
+              if (!reconciliation.matched) {
+                networkReconciliationsComplete = false;
+                networkDiagnostic = reconciliation.diagnostic;
+              }
+            }
+            latestNetworkSnapshot = responseSnapshot;
+          } else if (result.status === "added") {
+            networkReconciliationsComplete = false;
+            networkDiagnostic = "No successful full-cart POST response was observed for an added result.";
+          } else if (result.status === "failed") {
+            networkReconciliationsComplete = false;
+            networkDiagnostic = "A failed Cart Agent result may have partial cart effects that were not established by a full-cart response.";
+          }
+        }
         return result;
       },
       ...(signal ? { signal } : {}),
@@ -903,15 +1024,29 @@ export async function runCli(
 
     let final: CartInspectionResult;
     let finalInspectionFailure: string | null = null;
-    try {
+    const networkFinal = latestNetworkSnapshot && networkReconciliationsComplete
+      ? inspectionFromNetworkSnapshot(latestNetworkSnapshot, baseline.items, reconciledResults)
+      : null;
+    if (networkFinal) {
+      final = networkFinal;
+      console.log("Final cart verification used a reconciled full-cart network POST snapshot.");
+    } else try {
       final = await inspect(browser);
+      console.log(
+        "Final cart verification used the cart-page fallback; baseline cart-page navigation remains required because the cartcache GET has not been established as a complete baseline source.",
+      );
+      if (networkDiagnostic) {
+        finalInspectionFailure = `Network verification fell back to the cart page: ${networkDiagnostic}`;
+      }
     } catch (error) {
       final = {
         ...baseline,
         bodyText: "",
       };
-      finalInspectionFailure =
-        `Could not inspect the final cart: ${error instanceof Error ? error.message : String(error)}`;
+      finalInspectionFailure = [
+        networkDiagnostic ? `Network verification fell back: ${networkDiagnostic}` : null,
+        `Could not inspect the final cart: ${error instanceof Error ? error.message : String(error)}`,
+      ].filter(Boolean).join(" ");
     }
 
     const resultReason = progress.stopReason
