@@ -59,7 +59,9 @@ contains run diagnostics and may include active browser-session details.
 - Node.js 22.16.0 or newer
 - Codex CLI 0.154.0 or newer, signed into the intended ChatGPT account
 
-Both agents explicitly use `gpt-5.6-terra` with medium reasoning effort.
+Both agents default to `gpt-5.6-terra` with medium reasoning effort. Cart Agent
+runs can override either setting from the CLI; Ingredients Agent settings remain
+fixed for recipe compilation.
 
 All harness commands below run from the repository root.
 
@@ -97,7 +99,14 @@ npm run cart-recipes -- recipe-one.md recipe-two.md
 
 # Direct Cart Agent path from a prebuilt Shopping List
 npm run cart-list -- path/to/shopping-list.json
+
+# Example Cart Agent override (works with cart-list or cart-recipes)
+npm run cart-list -- path/to/shopping-list.json --model gpt-5.6-luna --effort medium
 ```
+
+Accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+`max`, and `ultra`. The selected model may support only a subset; Codex reports
+an unsupported model/effort combination when the run starts.
 
 Shopping Lists validate against `schemas/shopping-list.schema.json`. A full
 recipe run saves its generated list as `runs/<run-id>/shopping-list.json` and its

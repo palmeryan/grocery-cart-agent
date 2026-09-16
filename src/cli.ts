@@ -10,7 +10,6 @@ import { pathToFileURL } from "node:url";
 import {
   canonicalShoppingList,
   createRunPaths,
-  findPreviousReport,
   secureReport,
   sha256,
   writeShoppingListSnapshot,
@@ -35,7 +34,9 @@ import {
   codexEventsContainPlaywrightCall,
   INGREDIENTS_AGENT_MODEL,
   INGREDIENTS_AGENT_REASONING_EFFORT,
+  REASONING_EFFORTS,
   runCodex,
+  type ReasoningEffort,
 } from "./codex.js";
 import { loadConfig } from "./config.js";
 import {
@@ -57,7 +58,7 @@ import {
   type CartAgentTask,
 } from "./cart-agent.js";
 import { acquireRunLock, type RunLock } from "./lock.js";
-import { renderCartAgentPrompt, renderPrompt } from "./prompt.js";
+import { renderCartAgentPrompt } from "./prompt.js";
 import {
   buildCartReport,
   buildFailedCartReport,
@@ -73,9 +74,7 @@ import {
   parseCartAgentResult,
   parseAttachmentReport,
   parseAuthReport,
-  parseReport,
 } from "./validation.js";
-import type { CodexResult } from "./codex.js";
 import type {
   AttachmentReport,
   AuthReport,
@@ -85,17 +84,6 @@ import type {
   ShoppingList,
 } from "./types.js";
 import { writeUsageSummary } from "./usage.js";
-
-interface InvokeInput {
-  reportPath: string;
-  requestSha256: string;
-  prompt: string;
-}
-
-type InvokeCodex = (
-  input: InvokeInput,
-  signal?: AbortSignal,
-) => Promise<CodexResult>;
 
 interface InvokeCartAgentInput {
   task: CartAgentTask;
@@ -115,7 +103,6 @@ type CommandKind = RunPaths["kind"];
 interface CliDependencies {
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
-  invokeCodex?: InvokeCodex;
   invokeCartAgent?: InvokeCartAgent;
   runIngredients?: typeof runIngredientsAgent;
   inspectCart?: (
@@ -150,8 +137,8 @@ export interface SignalHandlerOptions {
   controller?: AbortController;
 }
 
-const USAGE = `usage: cart build <shopping-list.json>
-       cart build-recipes <recipe-file> [recipe-file ...]
+const USAGE = `usage: cart build <shopping-list.json> [--model <model>] [--effort <effort>]
+       cart build-recipes <recipe-file> [recipe-file ...] [--model <model>] [--effort <effort>]
        cart auth-check
        cart attachment-check`;
 
@@ -342,18 +329,53 @@ export async function withCliSignalHandlers<T>(
   }
 }
 
-const parseCommand = (
+export const parseCommand = (
   argv: string[],
 ): {
   command: CommandKind;
   shoppingListPath?: string;
   recipePaths?: string[];
+  cartAgentModel?: string;
+  cartAgentReasoningEffort?: ReasoningEffort;
 } | null => {
-  if (argv[0] === "build" && argv.length === 2 && argv[1]) {
-    return { command: "build", shoppingListPath: argv[1] };
-  }
-  if (argv[0] === "build-recipes" && argv.length >= 2) {
-    return { command: "build-recipes", recipePaths: argv.slice(1) };
+  const command = argv[0];
+  if (command === "build" || command === "build-recipes") {
+    const paths: string[] = [];
+    let cartAgentModel: string | undefined;
+    let cartAgentReasoningEffort: ReasoningEffort | undefined;
+    for (let index = 1; index < argv.length; index += 1) {
+      const argument = argv[index]!;
+      if (argument === "--model") {
+        const value = argv[index + 1];
+        if (!value || value.startsWith("--") || cartAgentModel) return null;
+        cartAgentModel = value;
+        index += 1;
+      } else if (argument === "--effort") {
+        const value = argv[index + 1];
+        if (
+          !value ||
+          !REASONING_EFFORTS.includes(value as ReasoningEffort) ||
+          cartAgentReasoningEffort
+        ) return null;
+        cartAgentReasoningEffort = value as ReasoningEffort;
+        index += 1;
+      } else if (argument.startsWith("--")) {
+        return null;
+      } else {
+        paths.push(argument);
+      }
+    }
+    const settings = {
+      ...(cartAgentModel ? { cartAgentModel } : {}),
+      ...(cartAgentReasoningEffort ? { cartAgentReasoningEffort } : {}),
+    };
+    if (command === "build" && paths.length === 1) {
+      return { command, shoppingListPath: paths[0]!, ...settings };
+    }
+    if (command === "build-recipes" && paths.length >= 1) {
+      return { command, recipePaths: paths, ...settings };
+    }
+    return null;
   }
   if (argv[0] === "auth-check" && argv.length === 1) {
     return { command: "auth-check" };
@@ -382,6 +404,9 @@ export async function runCli(
     return 2;
   }
   const command = parsed.command;
+  const cartAgentModel = parsed.cartAgentModel ?? CART_AGENT_MODEL;
+  const cartAgentReasoningEffort =
+    parsed.cartAgentReasoningEffort ?? CART_AGENT_REASONING_EFFORT;
 
   const rootDir = resolve(dependencies.rootDir ?? process.cwd());
   const secure =
@@ -516,10 +541,10 @@ export async function runCli(
         writeShoppingListSnapshot(requestSource!, paths.shoppingListPath);
       }
       writeRunMetadata(paths, requestSource!, requestSha256, {
-        model: CART_AGENT_MODEL,
-        reasoningEffort: CART_AGENT_REASONING_EFFORT,
-        cartAgentModel: CART_AGENT_MODEL,
-        cartAgentReasoningEffort: CART_AGENT_REASONING_EFFORT,
+        model: cartAgentModel,
+        reasoningEffort: cartAgentReasoningEffort,
+        cartAgentModel,
+        cartAgentReasoningEffort,
         ...(parsed.command === "build-recipes"
           ? {
               ingredientsAgentModel: INGREDIENTS_AGENT_MODEL,
@@ -664,62 +689,6 @@ export async function runCli(
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         exitCode = 1;
-      }
-      return await finish();
-    }
-
-    // Preserve the injectable whole-run seam used by the existing CLI
-    // lifecycle tests. The real CLI never supplies this dependency and uses
-    // the per-ingredient path below.
-    if (dependencies.invokeCodex) {
-      const previousReport = findPreviousReport(config.runsDir, requestSha256);
-      const prompt = renderPrompt({
-        request: request!,
-        requestSha256,
-        deliveryMode: config.deliveryMode,
-        previousReport,
-        browserOutputDir: paths.browserOutputDir,
-      });
-      try {
-        invocationAttempted = true;
-        const result = await dependencies.invokeCodex(
-          {
-            reportPath: paths.reportPath,
-            requestSha256,
-            prompt,
-          },
-          signal,
-        );
-        if (signal?.aborted) {
-          console.error(`Cart run aborted; inspect ${paths.runDir}`);
-          exitCode = 1;
-        } else if (result.timedOut || result.exitCode !== 0) {
-          console.error(`Codex failed; inspect ${paths.runDir}`);
-          exitCode = 1;
-        } else {
-          const report = parseReport(readFileSync(paths.reportPath, "utf8"));
-          assertReportMatchesShoppingList(report, request!);
-          if (report.requestSha256 !== requestSha256) {
-            throw new Error("Report requestSha256 does not match the request");
-          }
-          assertReportPreflight(report);
-          if (report.checkoutVisited || report.settingsChanged) {
-            console.error(`Safety condition violated; inspect ${paths.runDir}`);
-            exitCode = 1;
-          } else {
-            if (report.runStatus === "failed") {
-              console.error(
-                `Cart run failed: ${report.failureReason ?? "unknown failure"}. Report: ${paths.reportPath}`,
-              );
-            } else {
-              console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
-            }
-            exitCode = report.runStatus === "failed" ? 1 : 0;
-          }
-        }
-      } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        exitCode = 2;
       }
       return await finish();
     }
@@ -876,6 +845,8 @@ export async function runCli(
             schemaPath: join(rootDir, CART_AGENT_SCHEMA_PATH),
             playwrightMcpBin: config.playwrightMcpBin,
             remoteDebuggingPort,
+            model: cartAgentModel,
+            reasoningEffort: cartAgentReasoningEffort,
           });
           const result = await runCodex({
             executable: config.codexBin,

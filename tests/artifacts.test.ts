@@ -1,8 +1,5 @@
 import {
   mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalShoppingList,
   createRunPaths,
-  findPreviousReport,
   sha256,
 } from "../src/artifacts.js";
 import { loadConfig } from "../src/config.js";
@@ -35,25 +31,6 @@ describe("artifact paths", () => {
     expect(paths.kind).toBe("auth-check");
     expect(paths.reportPath).toContain("/runs/");
     expect(paths.browserOutputDir).toContain("/browser");
-  });
-
-  it("finds the latest valid prior report with the same request hash", () => {
-    const root = mkdtempSync(join(tmpdir(), "wfm-cart-"));
-    const runs = join(root, "runs");
-    const hash = "a".repeat(64);
-    mkdirSync(join(runs, "2026-01-01"), { recursive: true });
-    const report = JSON.parse(
-      readFileSync(
-        new URL("fixtures/valid-report.json", import.meta.url),
-        "utf8",
-      ),
-    );
-    report.requestSha256 = hash;
-    writeFileSync(
-      join(runs, "2026-01-01", "report.json"),
-      JSON.stringify(report),
-    );
-    expect(findPreviousReport(runs, hash)?.requestSha256).toBe(hash);
   });
 
   it("hashes equivalent nested requests identically", () => {

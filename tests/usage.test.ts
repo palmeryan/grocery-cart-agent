@@ -19,6 +19,32 @@ const writeEvents = (
 };
 
 describe("usage rollup", () => {
+  it("prices Cart Agent runs that override the model to Luna", () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-luna-"));
+    writeFileSync(
+      join(runDir, "metadata.json"),
+      JSON.stringify({ cartAgentModel: "gpt-5.6-luna" }),
+    );
+    writeEvents(join(runDir, "cart-agent", "ginger", "codex-events.jsonl"), {
+      input_tokens: 1_000_000,
+      cached_input_tokens: 900_000,
+      output_tokens: 1_000,
+    });
+
+    const summary = buildUsageSummary(runDir);
+
+    expect(summary.totals).toMatchObject({
+      priced_invocation_count: 1,
+      unpriced_invocation_count: 0,
+      estimated_list_price_usd: {
+        uncached_input_usd: 0.02,
+        cached_input_usd: 0.018,
+        output_usd: 0.0012,
+        total_usd: 0.0392,
+      },
+    });
+  });
+
   it("includes Ingredients Agent, Cart Agent, and retry usage", () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-"));
     writeFileSync(
