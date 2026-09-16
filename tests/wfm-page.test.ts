@@ -1,4 +1,6 @@
 import { chromium, type Browser, type Page } from "playwright";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addCandidate, extractCandidates, searchProducts, UnknownControlError, WfmPageError } from "../src/wfm-page.js";
 
@@ -18,6 +20,14 @@ beforeAll(async () => {
 afterAll(async () => await browser?.close());
 
 describe("WFM page adapter", () => {
+  it.skipIf(!runBrowserFixtures)("extracts cards in the CLI's tsx runtime", () => {
+    execFileSync(
+      fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url)),
+      [fileURLToPath(new URL("fixtures/tsx-wfm-page-smoke.ts", import.meta.url))],
+      { timeout: 15_000, stdio: "pipe" },
+    );
+  });
+
   it.skipIf(!runBrowserFixtures)("extracts ASIN-addressable card evidence", async () => {
     await page.setContent(`<div><a href="/grocery/product/organic-beans-b0abc12345"><h2>Organic beans</h2><span data-testid="size">15 oz</span><span data-testid="price">$2.99</span></a><button>Add to cart</button><p>In stock</p></div>`);
     await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
