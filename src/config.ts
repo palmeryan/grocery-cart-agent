@@ -9,7 +9,6 @@ export interface AppConfig {
   deliveryMode: "delivery";
   maxRunMs: number;
   codexBin: string;
-  playwrightMcpBin: string;
   chromeExecutable: string;
   chromeStartupTimeoutMs: number;
   chromeStopTimeoutMs: number;
@@ -52,12 +51,6 @@ export function loadConfig(
     deliveryMode: "delivery",
     maxRunMs,
     codexBin: env.CODEX_BIN ?? "codex",
-    playwrightMcpBin: env.PLAYWRIGHT_MCP_BIN ?? join(
-      absoluteRoot,
-      "node_modules",
-      ".bin",
-      "playwright-mcp",
-    ),
     chromeExecutable:
       env.CHROME_EXECUTABLE ??
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

@@ -9,13 +9,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CART_AGENT_MODEL,
-  CART_AGENT_REASONING_EFFORT,
   INGREDIENTS_AGENT_MODEL,
   INGREDIENTS_AGENT_REASONING_EFFORT,
-  buildCodexInvocation,
   buildIngredientsAgentInvocation,
-  codexEventsContainPlaywrightCall,
   createKillEscalation,
   runCodex,
 } from "../src/codex.js";
@@ -30,103 +26,6 @@ const processAlive = (pid: number): boolean => {
 };
 
 describe("Codex invocation", () => {
-  it("detects actual Playwright tool calls in Codex event logs", () => {
-    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-events-"));
-    const eventsPath = join(runDir, "events.jsonl");
-    writeFileSync(
-      eventsPath,
-      [
-        JSON.stringify({ type: "turn.started" }),
-        JSON.stringify({
-          type: "item.started",
-          item: {
-            type: "mcp_tool_call",
-            server: "playwright",
-            tool: "browser_snapshot",
-          },
-        }),
-      ].join("\n"),
-    );
-    expect(codexEventsContainPlaywrightCall(eventsPath)).toBe(true);
-    writeFileSync(eventsPath, `${JSON.stringify({ type: "turn.completed" })}\n`);
-    expect(codexEventsContainPlaywrightCall(eventsPath)).toBe(false);
-  });
-
-  it("uses a read-only sandbox and never bypasses approvals", () => {
-    const invocation = buildCodexInvocation({
-      rootDir: "/repo",
-      browserOutputDir: "/repo/runs/id/browser",
-      reportPath: "/repo/runs/id/report.json",
-      schemaPath: "/repo/schemas/report.schema.json",
-      playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
-      remoteDebuggingPort: 45678,
-    });
-    const joined = invocation.args.join(" ");
-    expect(invocation.args).toContain("--model");
-    expect(invocation.args).toContain(CART_AGENT_MODEL);
-    expect(invocation.args).toContain(
-      `model_reasoning_effort="${CART_AGENT_REASONING_EFFORT}"`,
-    );
-    expect(invocation.args).toContain("--sandbox");
-    expect(invocation.args).toContain("read-only");
-    expect(invocation.args).toContain("--ignore-user-config");
-    expect(invocation.args).toContain('approval_policy="never"');
-    expect(invocation.args).toContain(
-      'log_dir="/repo/runs/id/browser"',
-    );
-    expect(invocation.args).toContain("mcp_servers.playwright.required=true");
-    expect(invocation.args).toContain(
-      'mcp_servers.playwright.default_tools_approval_mode="approve"',
-    );
-    expect(joined).not.toContain(
-      'mcp_servers.playwright.default_tools_approval_mode="auto"',
-    );
-    expect(joined).not.toContain("dangerously-bypass");
-    expect(joined).not.toContain("--approve-for-me");
-    expect(joined).not.toContain("workspace-write");
-    expect(joined).not.toContain("--skip-git-repo-check");
-    expect(joined).toContain(
-      'mcp_servers.playwright.command="/repo/node_modules/.bin/playwright-mcp"',
-    );
-    expect(joined).toContain(
-      'mcp_servers.playwright.args=["--cdp-endpoint","http://127.0.0.1:45678","--output-dir","/repo/runs/id/browser","--caps=devtools","--snapshot-mode","none","--image-responses","omit"]',
-    );
-    expect(joined).toContain('--snapshot-mode","none');
-    expect(joined).toContain('--image-responses","omit');
-    expect(joined).not.toContain("--browser=chrome");
-    expect(joined).toContain("--cdp-endpoint");
-    expect(joined).not.toContain("--storage-state");
-    expect(joined).not.toContain("PLAYWRIGHT_MCP_EXTENSION_TOKEN");
-    expect(joined).not.toContain("--extension");
-  });
-
-  it("passes request content through stdin, never command arguments", () => {
-    const invocation = buildCodexInvocation({
-      rootDir: "/repo",
-      browserOutputDir: "/repo/runs/id/browser",
-      reportPath: "/repo/runs/id/report.json",
-      schemaPath: "/repo/schemas/report.schema.json",
-      playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
-      remoteDebuggingPort: 45678,
-    });
-    expect(invocation.args.at(-1)).toBe("-");
-  });
-
-  it("allows the Cart Agent model and reasoning effort to be overridden", () => {
-    const invocation = buildCodexInvocation({
-      rootDir: "/repo",
-      browserOutputDir: "/repo/runs/id/browser",
-      reportPath: "/repo/runs/id/report.json",
-      schemaPath: "/repo/schemas/report.schema.json",
-      playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
-      remoteDebuggingPort: 45678,
-      model: "gpt-5.6-luna",
-      reasoningEffort: "low",
-    });
-    expect(invocation.args).toContain("gpt-5.6-luna");
-    expect(invocation.args).toContain('model_reasoning_effort="low"');
-  });
-
   it("builds a read-only Ingredients Agent invocation without browser or MCP settings", () => {
     const invocation = buildIngredientsAgentInvocation({
       rootDir: "/repo",

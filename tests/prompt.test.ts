@@ -1,47 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   renderAttachmentPrompt,
-  renderCartAgentPrompt,
   renderIngredientsAgentPrompt,
 } from "../src/prompt.js";
-import type { CartAgentTask } from "../src/cart-agent.js";
-
-describe("Cart Agent prompt", () => {
-  it("scopes each agent invocation to one ingredient and carries cart context", () => {
-    const task: CartAgentTask = {
-      ingredient: {
-        id: "chicken",
-        request: "about 1.5 lb chicken thighs",
-        preferences: ["boneless", "skinless"],
-      },
-      recipeContext: [{
-        id: "stir-fry",
-        name: "Chicken stir-fry",
-        servings: 4,
-        context: "Quick weeknight dish",
-      }],
-    };
-    const prompt = renderCartAgentPrompt({
-      task,
-      cartContext: {
-        baselineItems: [{ productName: "Salt", quantity: 1 }],
-        priorResults: [],
-      },
-    });
-    expect(prompt).toContain("one Whole Foods Market ingredient");
-    expect(prompt).toContain("chicken thighs");
-    expect(prompt).toContain("Chicken stir-fry");
-    expect(prompt).toContain("baselineItems");
-    expect(prompt).toContain("return `already_present`");
-    expect(prompt).toContain("browser_evaluate");
-    expect(prompt).toContain("browser_find");
-    expect(prompt).toContain("browser_snapshot");
-    expect(prompt).toContain("weighted product");
-    expect(prompt).not.toContain("DELIVERY MODE:");
-    expect(prompt).not.toContain("BROWSER OUTPUT DIRECTORY:");
-  });
-});
-
 describe("harmless attachment prompt", () => {
   it("permits only navigation to and observation of Example Domain", () => {
     const prompt = renderAttachmentPrompt();

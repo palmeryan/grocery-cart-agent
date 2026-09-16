@@ -13,7 +13,7 @@ export interface GroceryRecipe {
   ingredients: GroceryIngredient[];
 }
 
-/** Public input shared by the full recipe path and direct Cart Agent path. */
+/** Public input shared by the full recipe path and direct cart path. */
 export interface ShoppingList {
   recipes: GroceryRecipe[];
 }
@@ -123,12 +123,12 @@ export interface RecipeCompilation {
 
 export type SelectionStatus = "added" | "already_present" | "skipped";
 
-export type CartAgentResultStatus = SelectionStatus | "failed";
+export type CartItemResultStatus = SelectionStatus | "failed";
 
-export interface CartAgentResult {
+export interface CartItemResult {
   ingredientId: string;
   requested: string;
-  status: CartAgentResultStatus;
+  status: CartItemResultStatus;
   productName: string | null;
   productId: string | null;
   packageSize: string | null;
@@ -183,9 +183,6 @@ export interface RunPaths {
   runDir: string;
   shoppingListPath: string;
   reportPath: string;
-  eventsPath: string;
-  stderrPath: string;
-  browserOutputDir: string;
 }
 
 export interface BrowserStopResult {

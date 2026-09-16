@@ -417,7 +417,7 @@ const compactContext = (values: readonly (string | null)[]): string | undefined 
   return unique.length > 0 ? unique.join(" ") : undefined;
 };
 
-/** Convert the source-preserving recipe compilation into the Cart Agent's input. */
+/** Convert source-preserving recipe compilation into the cart harness input. */
 export function recipeCompilationToShoppingList(
   compilation: RecipeCompilation,
 ): ShoppingList {
