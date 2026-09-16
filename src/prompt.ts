@@ -3,20 +3,9 @@ import { fileURLToPath } from "node:url";
 import type {
   CartAgentResult,
   CartItemSnapshot,
-  CartReport,
-  ShoppingList,
 } from "./types.js";
 import type { CartAgentTask } from "./cart-agent.js";
 import type { IngredientsAgentOutput as IngredientsAgentResult } from "./shopping-list-compiler.js";
-
-export interface PromptInput {
-  request: ShoppingList;
-  requestSha256: string;
-  deliveryMode: "delivery";
-  previousReport: CartReport | null;
-  /** Absolute path for Playwright MCP artifacts (screenshots/traces). */
-  browserOutputDir: string;
-}
 
 export interface CartAgentPromptInput {
   task: CartAgentTask;
@@ -33,10 +22,6 @@ export interface IngredientsAgentPromptInput {
   }[];
 }
 
-const templatePath = fileURLToPath(
-  new URL("../prompts/legacy-whole-run-cart-agent.md", import.meta.url),
-);
-
 const attachmentTemplate = readFileSync(
   fileURLToPath(new URL("../prompts/attachment-check.md", import.meta.url)),
   "utf8",
@@ -51,32 +36,6 @@ const ingredientsAgentTemplate = readFileSync(
   fileURLToPath(new URL("../prompts/ingredients-agent.md", import.meta.url)),
   "utf8",
 );
-
-export function renderPrompt(input: PromptInput): string {
-  const prior =
-    input.previousReport === null
-      ? "No prior matching report exists."
-      : `PREVIOUS REPORT FOR CONTROLLED RERUN:\n${JSON.stringify(
-          input.previousReport,
-          null,
-          2,
-        )}`;
-  const finalScreenshotPath = `${input.browserOutputDir}/final-state.png`;
-  return [
-    readFileSync(templatePath, "utf8").trim(),
-    `DELIVERY MODE: ${input.deliveryMode}`,
-    `REQUEST SHA-256: ${input.requestSha256}`,
-    [
-      `BROWSER OUTPUT DIRECTORY: ${input.browserOutputDir}`,
-      `FINAL SCREENSHOT PATH: ${finalScreenshotPath}`,
-      "When capturing the final screenshot, call browser_take_screenshot with",
-      `filename set to the absolute path ${finalScreenshotPath}.`,
-      "Do not use a relative filename such as final-state.png.",
-    ].join("\n"),
-    prior,
-    `GROCERY REQUEST:\n${JSON.stringify(input.request, null, 2)}`,
-  ].join("\n\n");
-}
 
 export function renderCartAgentPrompt(input: CartAgentPromptInput): string {
   return [

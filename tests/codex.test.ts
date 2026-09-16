@@ -72,6 +72,10 @@ describe("Codex invocation", () => {
     expect(invocation.args).toContain("--ignore-user-config");
     expect(invocation.args).toContain('approval_policy="never"');
     expect(invocation.args).toContain(
+      'log_dir="/repo/runs/id/browser"',
+    );
+    expect(invocation.args).toContain("mcp_servers.playwright.required=true");
+    expect(invocation.args).toContain(
       'mcp_servers.playwright.default_tools_approval_mode="approve"',
     );
     expect(joined).not.toContain(
@@ -106,6 +110,21 @@ describe("Codex invocation", () => {
       remoteDebuggingPort: 45678,
     });
     expect(invocation.args.at(-1)).toBe("-");
+  });
+
+  it("allows the Cart Agent model and reasoning effort to be overridden", () => {
+    const invocation = buildCodexInvocation({
+      rootDir: "/repo",
+      browserOutputDir: "/repo/runs/id/browser",
+      reportPath: "/repo/runs/id/report.json",
+      schemaPath: "/repo/schemas/report.schema.json",
+      playwrightMcpBin: "/repo/node_modules/.bin/playwright-mcp",
+      remoteDebuggingPort: 45678,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+    });
+    expect(invocation.args).toContain("gpt-5.6-luna");
+    expect(invocation.args).toContain('model_reasoning_effort="low"');
   });
 
   it("builds a read-only Ingredients Agent invocation without browser or MCP settings", () => {

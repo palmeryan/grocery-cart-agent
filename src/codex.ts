@@ -2,12 +2,24 @@ import { createWriteStream, readFileSync, type WriteStream } from "node:fs";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
-/** Fixed model settings for reproducible agent runs. */
+/** Default model settings for reproducible agent runs. */
 export const CART_AGENT_MODEL = "gpt-5.6-terra" as const;
 export const CART_AGENT_REASONING_EFFORT = "medium" as const;
 export const INGREDIENTS_AGENT_MODEL = "gpt-5.6-terra" as const;
 export const INGREDIENTS_AGENT_REASONING_EFFORT = "medium" as const;
 
+export const REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export interface CodexInvocationInput {
   rootDir: string;
@@ -16,6 +28,8 @@ export interface CodexInvocationInput {
   schemaPath: string;
   playwrightMcpBin: string;
   remoteDebuggingPort: number;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface CodexInvocation {
@@ -74,6 +88,8 @@ const REAP_POLL_MS = 25;
 export function buildCodexInvocation(
   input: CodexInvocationInput,
 ): CodexInvocation {
+  const model = input.model ?? CART_AGENT_MODEL;
+  const reasoningEffort = input.reasoningEffort ?? CART_AGENT_REASONING_EFFORT;
   const mcpArgs = [
     "--cdp-endpoint",
     `http://127.0.0.1:${input.remoteDebuggingPort}`,
@@ -89,9 +105,9 @@ export function buildCodexInvocation(
     args: [
       "exec",
       "--model",
-      CART_AGENT_MODEL,
+      model,
       "-c",
-      `model_reasoning_effort="${CART_AGENT_REASONING_EFFORT}"`,
+      `model_reasoning_effort="${reasoningEffort}"`,
       "--ignore-user-config",
       "--strict-config",
       "--ephemeral",
@@ -107,11 +123,15 @@ export function buildCodexInvocation(
       "-c",
       'approval_policy="never"',
       "-c",
+      `log_dir=${JSON.stringify(input.browserOutputDir)}`,
+      "-c",
       `mcp_servers.playwright.command=${JSON.stringify(input.playwrightMcpBin)}`,
       "-c",
       `mcp_servers.playwright.args=${JSON.stringify(mcpArgs)}`,
       "-c",
       "mcp_servers.playwright.enabled=true",
+      "-c",
+      "mcp_servers.playwright.required=true",
       "-c",
       "mcp_servers.playwright.default_tools_approval_mode=\"approve\"",
       "-c",

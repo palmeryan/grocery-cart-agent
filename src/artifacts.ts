@@ -3,14 +3,11 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readdirSync,
-  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
-import type { CartReport, RunPaths } from "./types.js";
-import { parseReport } from "./validation.js";
+import type { RunPaths } from "./types.js";
 
 export const sha256 = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
@@ -63,29 +60,6 @@ export function writeShoppingListSnapshot(source: string, destination: string): 
 export function secureReport(path: string): void {
   if (!existsSync(path)) return;
   chmodSync(path, 0o600);
-}
-
-export function findPreviousReport(
-  runsDir: string,
-  requestSha256: string,
-): CartReport | null {
-  let runIds: string[];
-  try {
-    runIds = readdirSync(runsDir).sort().reverse();
-  } catch {
-    return null;
-  }
-  for (const runId of runIds) {
-    try {
-      const value = parseReport(
-        readFileSync(join(runsDir, runId, "report.json"), "utf8"),
-      );
-      if (value.requestSha256 === requestSha256) return value;
-    } catch {
-      continue;
-    }
-  }
-  return null;
 }
 
 export function writeRunMetadata(
