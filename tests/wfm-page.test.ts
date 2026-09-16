@@ -35,7 +35,7 @@ describe("WFM page adapter", () => {
   });
 
   it.skipIf(!runBrowserFixtures)("searches with the semantic textbox and returns cards", async () => {
-    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter')history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value))" /><div><a href="/grocery/product/rice-b0xyz12345"><h2>Rice</h2></a><button>Add to cart</button></div>`);
+    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter'){history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value));document.querySelector('#results').textContent='1 results for '+String.fromCharCode(34)+this.value+String.fromCharCode(34)}" /><p id="results"></p><div><a href="/grocery/product/rice-b0xyz12345"><h2>Rice</h2></a><button>Add to cart</button></div>`);
     await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
     const products = await searchProducts(page, "rice");
     expect(products[0]?.id).toBe("b0xyz12345");
@@ -43,9 +43,16 @@ describe("WFM page adapter", () => {
   });
 
   it.skipIf(!runBrowserFixtures)("returns an empty result set so the model can request a revised query", async () => {
-    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter')history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value))" /><p>No results found</p>`);
+    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter'){history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value));document.querySelector('#results').textContent='0 results for '+String.fromCharCode(34)+this.value+String.fromCharCode(34)}" /><p id="results"></p>`);
     await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
     await expect(searchProducts(page, "unlikely ingredient")).resolves.toEqual([]);
+  });
+
+  it.skipIf(!runBrowserFixtures)("waits for results for the new query rather than stale cards", async () => {
+    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter'){history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value));setTimeout(()=>{document.querySelector('#results').textContent='1 results for '+String.fromCharCode(34)+this.value+String.fromCharCode(34);document.querySelector('#card').innerHTML='<a href=&quot;/grocery/product/soy-b0soy12345&quot;><h2>Soy sauce</h2></a><button>Add to Cart</button>'},150)}" /><p id="results">1 results for "old query"</p><div id="card"><a href="/grocery/product/old-b0old12345"><h2>Old result</h2></a><button>Add to Cart</button></div>`);
+    await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
+    const products = await searchProducts(page, "soy sauce");
+    expect(products.map(({ productName }) => productName)).toEqual(["Soy sauce"]);
   });
 
   it.skipIf(!runBrowserFixtures)("adds only the selected card and its associated quantity", async () => {
