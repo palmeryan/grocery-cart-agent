@@ -89,19 +89,31 @@ export async function extractCandidates(page: Page): Promise<ProductCandidate[]>
         (element.matches("a[href*='/grocery/product/']") ? element as HTMLAnchorElement : null);
       const asin = element.getAttribute("data-asin") ?? element.getAttribute("data-product-asin");
       const text = element.innerText.replace(/\s+/g, " ").trim();
-      const labelled = (selector: string): string | null =>
-        element.querySelector<HTMLElement>(selector)?.innerText.trim() || null;
+      const nameElement = element.querySelector<HTMLElement>("[data-testid*='product-name'], [data-testid*='productName'], h2, h3");
+      const sizeElement = element.querySelector<HTMLElement>("[data-testid*='size'], [data-testid*='Size'], [class*='size']");
+      const priceElement = element.querySelector<HTMLElement>("[data-testid*='price'], [data-testid*='Price'], [class*='price']");
+      let fallbackName = "";
+      if (link) {
+        const lines = link.innerText.split("\n");
+        fallbackName = (lines[1] ?? lines[0] ?? "").trim();
+      }
+      let hasAdd = false;
+      let hasIncrease = false;
+      for (const button of element.querySelectorAll("button")) {
+        const label = button.getAttribute("aria-label") || button.innerText;
+        if (/add\s*to\s*cart/i.test(label)) hasAdd = true;
+        if (/increase quantity/i.test(label)) hasIncrease = true;
+      }
       return {
         asin: asin ?? (link ? link.getAttribute("href") : null),
-        name: labelled("[data-testid*='product-name'], [data-testid*='productName'], h2, h3") ??
-          (link?.innerText.split("\n").map((line) => line.trim()).filter(Boolean)[1] ?? ""),
-        size: labelled("[data-testid*='size'], [data-testid*='Size'], [class*='size']") ??
+        name: nameElement?.innerText.trim() || fallbackName,
+        size: sizeElement?.innerText.trim() ||
           (link?.innerText.match(/\b\d+(?:\.\d+)?\s*(?:oz|ounce|ounces|lb|lbs|pound|pounds|g|kg)\b/i)?.[0] ?? null),
-        price: labelled("[data-testid*='price'], [data-testid*='Price'], [class*='price']") ??
+        price: priceElement?.innerText.trim() ||
           (text.match(/\$\s*\d+(?:\.\d{2})?/)?.[0] ?? null),
         text,
-        hasAdd: [...element.querySelectorAll("button")].some((button) => /add\s*to\s*cart/i.test(button.innerText || button.getAttribute("aria-label") || "")),
-        hasIncrease: [...element.querySelectorAll("button")].some((button) => /increase quantity/i.test(button.getAttribute("aria-label") || button.innerText)),
+        hasAdd,
+        hasIncrease,
       };
     });
     const id = data.asin?.includes("/product/") ? asinFromHref(data.asin) : data.asin;
