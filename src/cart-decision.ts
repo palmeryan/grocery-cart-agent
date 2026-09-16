@@ -72,10 +72,18 @@ export function parseDecision(text: string): CartDecision {
   try { value = JSON.parse(text); } catch { throw new Error("Invalid cart decision: response is not JSON"); }
   if (!validator(value)) throw new Error(`Invalid cart decision: ${errors(validator.errors)}`);
   const decision = value as Record<string, unknown>;
-  if (decision.action === "select" && typeof decision.candidateId === "string" && Number.isSafeInteger(decision.quantity) && (decision.quantity as number) > 0 && (typeof decision.option === "string" || decision.option === null) && (typeof decision.reason === "string" || decision.reason === null) && decision.query === null && decision.cartProductId === null) return decision as unknown as CartDecision;
-  if (decision.action === "search_again" && typeof decision.query === "string" && decision.candidateId === null && decision.quantity === 0 && decision.option === null && decision.cartProductId === null && decision.reason === null) return decision as unknown as CartDecision;
-  if (decision.action === "already_present" && typeof decision.cartProductId === "string" && decision.candidateId === null && decision.quantity === 0 && decision.option === null && decision.query === null && decision.reason === null) return decision as unknown as CartDecision;
-  if (decision.action === "skip" && typeof decision.reason === "string" && decision.candidateId === null && decision.quantity === 0 && decision.option === null && decision.query === null && decision.cartProductId === null) return decision as unknown as CartDecision;
+  if (decision.action === "select" && typeof decision.candidateId === "string" && Number.isSafeInteger(decision.quantity) && (decision.quantity as number) > 0 && (typeof decision.option === "string" || decision.option === null) && (typeof decision.reason === "string" || decision.reason === null)) {
+    return { action: "select", candidateId: decision.candidateId, quantity: decision.quantity as number, option: decision.option, reason: decision.reason } as CartDecision;
+  }
+  if (decision.action === "search_again" && typeof decision.query === "string" && decision.query.trim()) {
+    return { action: "search_again", query: decision.query };
+  }
+  if (decision.action === "already_present" && typeof decision.cartProductId === "string") {
+    return { action: "already_present", cartProductId: decision.cartProductId };
+  }
+  if (decision.action === "skip" && typeof decision.reason === "string") {
+    return { action: "skip", reason: decision.reason };
+  }
   throw new Error("Invalid cart decision: action fields");
 }
 
@@ -85,12 +93,12 @@ export function validateDecision(
   currentCart: readonly CartItemSnapshot[],
 ): CartDecision {
   if (decision.action === "select") {
-    const candidate = candidates.find(({ id }) => id === decision.candidateId);
+    const candidate = candidates.find(({ id }) => id.toUpperCase() === decision.candidateId.toUpperCase());
     if (!candidate) throw new Error(`Cart decision selected stale candidate ID: ${decision.candidateId}`);
     if (!candidate.available) throw new Error(`Cart decision selected unavailable candidate: ${decision.candidateId}`);
     if (!Number.isSafeInteger(decision.quantity) || decision.quantity < 1) throw new Error("Cart decision quantity must be a positive safe integer");
   } else if (decision.action === "already_present") {
-    if (!currentCart.some((item) => item.productId === decision.cartProductId)) {
+    if (!currentCart.some((item) => item.productId?.toUpperCase() === decision.cartProductId.toUpperCase())) {
       throw new Error(`Cart decision referenced missing cart product ID: ${decision.cartProductId}`);
     }
   }

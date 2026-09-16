@@ -76,9 +76,16 @@ export async function searchProducts(page: Page, query: string): Promise<Product
   await page.waitForLoadState("domcontentloaded").catch(() => undefined);
   ensureWfmPage(page);
   await page.waitForFunction(
-    () => document.querySelector("a[href*='/grocery/product/']") !== null ||
-      /(?:no|0) results|couldn.t find|did not match/i.test(document.body.innerText),
-    undefined,
+    (searchQuery) => {
+      const body = document.body.innerText.toLowerCase();
+      if (!body.includes(`results for "${searchQuery}"`)) return false;
+      if (/(?:^|\n)(?:0|no) results\b/.test(body)) return true;
+      for (const link of document.querySelectorAll("a[href*='/grocery/product/']")) {
+        if (link.getClientRects().length > 0) return true;
+      }
+      return false;
+    },
+    query.toLowerCase(),
     { timeout: 10_000 },
   );
   return extractCandidates(page);

@@ -18,6 +18,7 @@ describe("bounded cart decisions", () => {
     expect(parseDecision('{"action":"select","candidateId":"a","quantity":2,"option":null,"query":null,"cartProductId":null,"reason":null}')).toMatchObject({ action: "select", candidateId: "a", quantity: 2, option: null });
     expect(() => parseDecision('{"action":"added","candidateId":"a"}')).toThrow("Invalid cart decision");
     expect(() => parseDecision('{"action":"skip","reason":"no match","extra":true}')).toThrow("Invalid cart decision");
+    expect(parseDecision('{"action":"search_again","candidateId":null,"quantity":1,"option":null,"query":"regular soy sauce","cartProductId":null,"reason":"No product candidates were supplied."}')).toEqual({ action: "search_again", query: "regular soy sauce" });
   });
 
   it("validates selected and existing IDs against observations", () => {
@@ -32,6 +33,7 @@ describe("bounded cart decisions", () => {
     const prompt = renderDecisionPrompt({ task: { ingredientId: "i", requested: "beans" }, candidates, currentCart: cart });
     expect(prompt).toContain("BEGIN STOREFRONT OBSERVATION");
     expect(prompt).toContain("no browser");
+    expect(prompt).toContain("return `already_present` instead of adding another unit");
     const invocation = buildDecisionInvocation({ rootDir: "/repo", outputPath: "/tmp/decision.json", schemaPath: "/repo/schemas/cart-decision.schema.json" });
     expect(invocation.args).toContain("gpt-5.6-terra");
     expect(invocation.args).toContain('model_reasoning_effort="medium"');
