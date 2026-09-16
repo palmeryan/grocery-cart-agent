@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  flattenIngredientTasks,
-  runIngredientTasks,
-} from "../src/ingredient-runner.js";
-import type { GroceryRequest, IngredientResult } from "../src/types.js";
+  flattenCartAgentTasks,
+  runCartAgentTasks,
+} from "../src/cart-agent.js";
+import type { ShoppingList, CartAgentResult } from "../src/types.js";
 
-const request: GroceryRequest = {
+const request: ShoppingList = {
   recipes: [{
     id: "recipe",
     name: "Test recipe",
@@ -18,11 +18,12 @@ const request: GroceryRequest = {
   }],
 };
 
-const added = (ingredientId: string, requested: string): IngredientResult => ({
+const added = (ingredientId: string, requested: string): CartAgentResult => ({
   ingredientId,
   requested,
   status: "added",
   productName: `${ingredientId} product`,
+  productId: "B000000001",
   packageSize: "1 package",
   quantity: 1,
   price: "$1.00",
@@ -31,9 +32,9 @@ const added = (ingredientId: string, requested: string): IngredientResult => ({
   failureReason: null,
 });
 
-describe("ingredient runner", () => {
+describe("Cart Agent runner", () => {
   it("flattens recipes while preserving recipe context", () => {
-    const tasks = flattenIngredientTasks(request);
+    const tasks = flattenCartAgentTasks(request);
     expect(tasks).toHaveLength(2);
     expect(tasks[0]?.ingredient.id).toBe("apples");
     expect(tasks[0]?.recipeContext[0]?.name).toBe("Test recipe");
@@ -43,8 +44,8 @@ describe("ingredient runner", () => {
     const calls: string[] = [];
     const priorCounts: number[] = [];
     const progress: number[] = [];
-    const result = await runIngredientTasks({
-      tasks: flattenIngredientTasks(request),
+    const result = await runCartAgentTasks({
+      tasks: flattenCartAgentTasks(request),
       session: { name: "shared" },
       invokeAgent: async ({ task, priorResults }) => {
         calls.push(task.ingredient.id);
@@ -63,10 +64,10 @@ describe("ingredient runner", () => {
     expect(result.stopped).toBe(false);
   });
 
-  it("records an explicit agent failure and continues to the next ingredient", async () => {
+  it("stops after a terminal Cart Agent failure", async () => {
     const calls: string[] = [];
-    const result = await runIngredientTasks({
-      tasks: flattenIngredientTasks(request),
+    const result = await runCartAgentTasks({
+      tasks: flattenCartAgentTasks(request),
       session: undefined,
       invokeAgent: async ({ task }) => {
         calls.push(task.ingredient.id);
@@ -76,28 +77,29 @@ describe("ingredient runner", () => {
             requested: task.ingredient.request,
             status: "failed",
             productName: null,
+            productId: null,
             packageSize: null,
             quantity: 0,
             price: null,
             rationale: "The agent could not complete the item.",
             confidence: "low",
             failureReason: "The product page was unavailable.",
-          } satisfies IngredientResult;
+          } satisfies CartAgentResult;
         }
         return added(task.ingredient.id, task.ingredient.request);
       },
     });
 
-    expect(calls).toEqual(["apples", "salt"]);
+    expect(calls).toEqual(["apples"]);
     expect(result.results.map(({ result: item }) => item.status)).toEqual([
       "failed",
-      "added",
     ]);
+    expect(result.stopped).toBe(true);
   });
 
   it("keeps processing when diagnostic progress output fails", async () => {
-    const result = await runIngredientTasks({
-      tasks: flattenIngredientTasks(request),
+    const result = await runCartAgentTasks({
+      tasks: flattenCartAgentTasks(request),
       session: undefined,
       invokeAgent: async ({ task }) => added(task.ingredient.id, task.ingredient.request),
       onProgress: () => {
@@ -110,8 +112,8 @@ describe("ingredient runner", () => {
   });
 
   it("enforces status-specific product fields after schema parsing", async () => {
-    const [task] = flattenIngredientTasks(request);
-    const result = await runIngredientTasks({
+    const [task] = flattenCartAgentTasks(request);
+    const result = await runCartAgentTasks({
       tasks: task ? [task] : [],
       session: undefined,
       invokeAgent: async ({ task: currentTask }) => ({
@@ -119,6 +121,7 @@ describe("ingredient runner", () => {
         requested: currentTask.ingredient.request,
         status: "added",
         productName: null,
+        productId: null,
         packageSize: null,
         quantity: 0,
         price: null,
@@ -132,5 +135,29 @@ describe("ingredient runner", () => {
     expect(result.results[0]?.result.failureReason).toContain(
       "without a complete product result",
     );
+  });
+
+  it("accepts already-present baseline items without package size or price", async () => {
+    const [task] = flattenCartAgentTasks(request);
+    const result = await runCartAgentTasks({
+      tasks: task ? [task] : [],
+      session: undefined,
+      invokeAgent: async ({ task: currentTask }) => ({
+        ingredientId: currentTask.ingredient.id,
+        requested: currentTask.ingredient.request,
+        status: "already_present",
+        productName: "Organic apples",
+        productId: "B000000002",
+        packageSize: null,
+        quantity: 1,
+        price: null,
+        rationale: "A matching item is present in the baseline cart.",
+        confidence: "high",
+        failureReason: null,
+      }),
+    });
+
+    expect(result.stopped).toBe(false);
+    expect(result.results[0]?.result.status).toBe("already_present");
   });
 });

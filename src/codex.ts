@@ -1,21 +1,13 @@
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, readFileSync, type WriteStream } from "node:fs";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
 /** Fixed model settings for reproducible agent runs. */
 export const CART_AGENT_MODEL = "gpt-5.6-terra" as const;
-export const CART_AGENT_REASONING_EFFORT = "low" as const;
+export const CART_AGENT_REASONING_EFFORT = "medium" as const;
 export const INGREDIENTS_AGENT_MODEL = "gpt-5.6-terra" as const;
 export const INGREDIENTS_AGENT_REASONING_EFFORT = "medium" as const;
 
-/** @deprecated Use CART_AGENT_MODEL. */
-export const CART_MODEL = CART_AGENT_MODEL;
-/** @deprecated Use CART_AGENT_REASONING_EFFORT. */
-export const CART_REASONING_EFFORT = CART_AGENT_REASONING_EFFORT;
-/** @deprecated Use INGREDIENTS_AGENT_MODEL. */
-export const MEAL_PLAN_MODEL = INGREDIENTS_AGENT_MODEL;
-/** @deprecated Use INGREDIENTS_AGENT_REASONING_EFFORT. */
-export const MEAL_PLAN_REASONING_EFFORT = INGREDIENTS_AGENT_REASONING_EFFORT;
 
 export interface CodexInvocationInput {
   rootDir: string;
@@ -40,6 +32,26 @@ export interface CodexResult {
   exitCode: number;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+}
+
+/** Confirm from the JSON event stream that the agent actually used Playwright. */
+export function codexEventsContainPlaywrightCall(path: string): boolean {
+  try {
+    return readFileSync(path, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .some((line) => {
+        const event = JSON.parse(line) as {
+          item?: { type?: unknown; server?: unknown };
+        };
+        return (
+          event.item?.type === "mcp_tool_call" &&
+          event.item.server === "playwright"
+        );
+      });
+  } catch {
+    return false;
+  }
 }
 
 export interface RunCodexInput {
@@ -68,6 +80,10 @@ export function buildCodexInvocation(
     "--output-dir",
     input.browserOutputDir,
     "--caps=devtools",
+    "--snapshot-mode",
+    "none",
+    "--image-responses",
+    "omit",
   ];
   return {
     args: [
@@ -136,11 +152,6 @@ export function buildIngredientsAgentInvocation(
     ],
   };
 }
-
-/** @deprecated Use IngredientsAgentInvocationInput. */
-export type MealPlanCompilerInvocationInput = IngredientsAgentInvocationInput;
-/** @deprecated Use buildIngredientsAgentInvocation. */
-export const buildMealPlanCompilerInvocation = buildIngredientsAgentInvocation;
 
 function openExclusiveLog(path: string): Promise<WriteStream> {
   return new Promise((resolve, reject) => {

@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 import {
   assertAttachmentReportSafe,
   assertAuthReportSafe,
-  assertReportMatchesRequest,
+  assertAuthReportReady,
+  assertReportMatchesShoppingList,
   assertReportPreflight,
   ValidationFailure,
-  loadRequest,
+  loadShoppingList,
   parseAttachmentReport,
   parseAuthReport,
   parseReport,
@@ -28,12 +29,12 @@ const writeTempRequest = (value: unknown): string => {
 
 describe("request validation", () => {
   it("loads a valid recipe-aware request", () => {
-    const request = loadRequest(fixture("valid-request.json"));
+    const request = loadShoppingList(fixture("valid-shopping-list.json"));
     expect(request.recipes[0]?.ingredients[0]?.id).toBe("chicken");
   });
 
   it("rejects an ingredient without an amount-bearing request", () => {
-    expect(() => loadRequest(fixture("invalid-request.json")))
+    expect(() => loadShoppingList(fixture("invalid-shopping-list.json")))
       .toThrow(ValidationFailure);
   });
 
@@ -56,7 +57,7 @@ describe("request validation", () => {
         },
       ],
     });
-    expect(() => loadRequest(path)).toThrow(/duplicate ingredient IDs: chicken/i);
+    expect(() => loadShoppingList(path)).toThrow(/duplicate ingredient IDs: chicken/i);
   });
 
   it("rejects duplicate ingredient IDs within one recipe", () => {
@@ -74,7 +75,7 @@ describe("request validation", () => {
         },
       ],
     });
-    expect(() => loadRequest(path)).toThrow(/duplicate ingredient IDs: chicken/i);
+    expect(() => loadShoppingList(path)).toThrow(/duplicate ingredient IDs: chicken/i);
   });
 
   it("rejects duplicate recipe IDs", () => {
@@ -96,14 +97,14 @@ describe("request validation", () => {
         },
       ],
     });
-    expect(() => loadRequest(path)).toThrow(/duplicate recipe IDs: stir-fry/i);
+    expect(() => loadShoppingList(path)).toThrow(/duplicate recipe IDs: stir-fry/i);
   });
 
   it.each(["staples.json", "ambiguous.json", "substitutions.json"])(
     "validates acceptance fixture %s",
     (name) => {
       const path = fileURLToPath(new URL(`../examples/${name}`, import.meta.url));
-      expect(loadRequest(path).recipes).toHaveLength(1);
+      expect(loadShoppingList(path).recipes).toHaveLength(1);
     },
   );
 });
@@ -116,38 +117,49 @@ describe("report validation", () => {
     expect(report.checkoutVisited).toBe(false);
   });
 
+  it("accepts fractional quantities for weighted cart snapshots", () => {
+    const report = JSON.parse(
+      readFileSync(fixture("valid-report.json"), "utf8"),
+    );
+    report.baselineCartCount = 1;
+    report.baselineItems = [
+      { productName: "Organic ginger root", quantity: 0.25 },
+    ];
+    expect(() => parseReport(JSON.stringify(report))).not.toThrow();
+  });
+
   it("rejects malformed final output", () => {
     expect(() => parseReport('{"runStatus":"completed"}'))
       .toThrow(ValidationFailure);
   });
 
   it("requires one report selection per requested ingredient", () => {
-    const request = loadRequest(fixture("valid-request.json"));
+    const request = loadShoppingList(fixture("valid-shopping-list.json"));
     const report = parseReport(
       readFileSync(fixture("valid-report.json"), "utf8"),
     );
     report.selections = [];
-    expect(() => assertReportMatchesRequest(report, request))
+    expect(() => assertReportMatchesShoppingList(report, request))
       .toThrow(/missing ingredient IDs: chicken/);
   });
 
   it("rejects unknown report selection IDs", () => {
-    const request = loadRequest(fixture("valid-request.json"));
+    const request = loadShoppingList(fixture("valid-shopping-list.json"));
     const report = parseReport(
       readFileSync(fixture("valid-report.json"), "utf8"),
     );
     report.selections[0]!.ingredientId = "not-in-request";
-    expect(() => assertReportMatchesRequest(report, request))
+    expect(() => assertReportMatchesShoppingList(report, request))
       .toThrow(/unknown ingredient IDs: not-in-request/);
   });
 
   it("rejects duplicate report selection IDs", () => {
-    const request = loadRequest(fixture("valid-request.json"));
+    const request = loadShoppingList(fixture("valid-shopping-list.json"));
     const report = parseReport(
       readFileSync(fixture("valid-report.json"), "utf8"),
     );
     report.selections.push({ ...report.selections[0]! });
-    expect(() => assertReportMatchesRequest(report, request))
+    expect(() => assertReportMatchesShoppingList(report, request))
       .toThrow(/duplicate ingredient IDs: chicken/);
   });
 
@@ -161,11 +173,9 @@ describe("report validation", () => {
   it.each([
     ["completed", "authenticated", { authenticated: false }],
     ["completed", "deliveryModeConfirmed", { deliveryModeConfirmed: false }],
-    ["completed", "deliveryAddressConfirmed", { deliveryAddressConfirmed: false }],
     ["completed", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
     ["partial", "authenticated", { authenticated: false }],
     ["partial", "deliveryModeConfirmed", { deliveryModeConfirmed: false }],
-    ["partial", "deliveryAddressConfirmed", { deliveryAddressConfirmed: false }],
     ["partial", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
   ] as const)(
     "rejects %s preflight when %s is false",
@@ -188,7 +198,6 @@ describe("report validation", () => {
     report.runStatus = "failed";
     report.authenticated = false;
     report.deliveryModeConfirmed = false;
-    report.deliveryAddressConfirmed = false;
     report.wholeFoodsStorefrontConfirmed = false;
     report.failureReason = "not authenticated";
     expect(() => assertReportPreflight(report)).not.toThrow();
@@ -233,21 +242,30 @@ describe("auth report validation", () => {
   it("accepts a successful non-mutating auth report", () => {
     const report = parseAuthReport(JSON.stringify(validAuthReport()));
     expect(() => assertAuthReportSafe(report)).not.toThrow();
+    expect(() => assertAuthReportReady(report)).not.toThrow();
   });
 
   it.each([
     ["authenticated", false],
     ["deliveryModeConfirmed", false],
-    ["deliveryAddressConfirmed", false],
     ["wholeFoodsStorefrontConfirmed", false],
+  ] as const)("rejects an incomplete %s readiness result", (field, value) => {
+    const report = validAuthReport();
+    report[field] = value;
+    expect(() =>
+      assertAuthReportReady(parseAuthReport(JSON.stringify(report))),
+    ).toThrow();
+  });
+
+  it.each([
     ["checkoutVisited", true],
     ["settingsChanged", true],
-  ] as const)("rejects an unsafe or incomplete %s result", (field, value) => {
+  ] as const)("rejects a true %s safety flag", (field, value) => {
     const report = validAuthReport();
     report[field] = value;
     expect(() =>
       assertAuthReportSafe(parseAuthReport(JSON.stringify(report))),
-    ).toThrow();
+    ).toThrow("prohibited safety boundary");
   });
 
   it("includes the reported failure reason when an auth gate fails", () => {
@@ -256,12 +274,11 @@ describe("auth report validation", () => {
       runStatus: "failed",
       authenticated: false,
       deliveryModeConfirmed: false,
-      deliveryAddressConfirmed: false,
       wholeFoodsStorefrontConfirmed: false,
       failureReason: "Playwright Extension was not found",
     };
     expect(() =>
-      assertAuthReportSafe(parseAuthReport(JSON.stringify(report))),
+      assertAuthReportReady(parseAuthReport(JSON.stringify(report))),
     ).toThrow("Playwright Extension was not found");
   });
 

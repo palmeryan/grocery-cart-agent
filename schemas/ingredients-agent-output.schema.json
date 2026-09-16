@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://whole-foods-cart.local/schemas/meal-plan-draft.schema.json",
+  "$id": "https://whole-foods-cart.local/schemas/ingredients-agent-output.schema.json",
   "title": "Recipe ingredient extraction",
-  "description": "Minimal source-preserving extraction produced before deterministic shopping-plan compilation.",
+  "description": "Minimal source-preserving Ingredients Agent extraction produced before deterministic recipe compilation.",
   "type": "object",
   "additionalProperties": false,
   "required": ["recipes"],

@@ -3,17 +3,17 @@ import type {
   CartItemSnapshot,
   CartReport,
   CartSelection,
-  GroceryRequest,
+  ShoppingList,
   CartAgentResult,
 } from "./types.js";
 import {
-  cartTextContainsSelection,
   computeCartDelta,
+  getTotalItemCount,
   type CartInspectionResult,
 } from "./cart-state.js";
 
 export interface BuildCartReportInput {
-  request: GroceryRequest;
+  request: ShoppingList;
   requestSha256: string;
   preflight: AuthReport;
   baseline: CartInspectionResult;
@@ -25,7 +25,7 @@ export interface BuildCartReportInput {
 }
 
 export function completeCartAgentResults(
-  request: GroceryRequest,
+  request: ShoppingList,
   results: readonly CartAgentResult[],
   reason: string,
 ): CartAgentResult[] {
@@ -37,19 +37,17 @@ export function completeCartAgentResults(
         requested: ingredient.request,
         status: "failed",
         productName: null,
+        productId: null,
         packageSize: null,
         quantity: 0,
         price: null,
-        rationale: "The outer ingredient loop did not reach this ingredient.",
+        rationale: "The Cart Agent loop did not reach this shopping-list item.",
         confidence: "low",
         failureReason: reason,
       },
     ),
   );
 }
-
-/** @deprecated Use completeCartAgentResults. */
-export const completeIngredientResults = completeCartAgentResults;
 
 const emptySelection = (
   result: CartAgentResult,
@@ -59,6 +57,7 @@ const emptySelection = (
   requested: result.requested,
   status: "skipped",
   productName: null,
+  productId: null,
   packageSize: null,
   quantity: 0,
   price: null,
@@ -73,6 +72,7 @@ const asSelection = (result: CartAgentResult): CartSelection => {
       requested: result.requested,
       status: result.status,
       productName: result.productName,
+      productId: result.productId,
       packageSize: result.packageSize,
       quantity: result.quantity,
       price: result.price,
@@ -87,20 +87,51 @@ const asSelection = (result: CartAgentResult): CartSelection => {
 };
 
 const normalizeName = (value: string): string =>
-  value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  value
+    .normalize("NFKC")
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
 
-const deltaContains = (
-  delta: readonly CartItemSnapshot[],
+/**
+ * Cart Agent quantity is a count of purchase units. Whole Foods cart controls
+ * normally expose that same count, but weighted produce can instead expose the
+ * selected weight (for example, one 0.25 lb ginger purchase appears as 0.25).
+ * A positive cart value therefore proves a single reported purchase unit; only
+ * multi-unit results require a numeric quantity comparison.
+ */
+const quantityMatchesResult = (
+  item: CartItemSnapshot,
+  result: CartAgentResult,
+): boolean => result.quantity === 1 ? item.quantity > 0 : item.quantity >= result.quantity;
+
+const itemMatchesResult = (
+  item: CartItemSnapshot,
   result: CartAgentResult,
 ): boolean => {
   if (result.productName === null || result.quantity < 1) return false;
+  if (item.productId && result.productId) {
+    return (
+      item.productId.toLocaleUpperCase() === result.productId.toLocaleUpperCase() &&
+      quantityMatchesResult(item, result)
+    );
+  }
+  const actual = normalizeName(item.productName);
   const expected = normalizeName(result.productName);
-  return delta.some(
-    (item) =>
-      normalizeName(item.productName) === expected &&
-      item.quantity >= result.quantity,
+  const expectedWithPackage = result.packageSize
+    ? normalizeName(`${result.productName} ${result.packageSize}`)
+    : expected;
+  return (
+    (actual === expected || actual === expectedWithPackage) &&
+    quantityMatchesResult(item, result)
   );
 };
+
+const cartItemsContain = (
+  items: readonly CartItemSnapshot[],
+  result: CartAgentResult,
+): boolean => items.some((item) => itemMatchesResult(item, result));
 
 interface VerificationNote {
   ingredientId: string;
@@ -119,18 +150,13 @@ const verifyResults = (
   const notes: VerificationNote[] = [];
   for (const result of results) {
     if (result.status === "skipped" || result.status === "failed") continue;
-    const hasTextEvidence =
-      result.productName !== null &&
-      cartTextContainsSelection(
-        final.bodyText,
-        result.productName,
-        result.quantity,
-      );
-    const hasDeltaEvidence =
-      !deltaAvailable ||
-      result.status === "already_present" ||
-      deltaContains(delta, result);
-    if (!hasTextEvidence || !hasDeltaEvidence) {
+    if (!deltaAvailable) continue;
+    const verified =
+      result.status === "added"
+        ? cartItemsContain(delta, result)
+        : cartItemsContain(baseline.items, result) ||
+          cartItemsContain(final.items, result);
+    if (!verified) {
       notes.push({
         ingredientId: result.ingredientId,
         note:
@@ -143,17 +169,16 @@ const verifyResults = (
 };
 
 export function buildCartReport(input: BuildCartReportInput): CartReport {
-  const extractionNotes = [
-    { phase: "baseline", inspection: input.baseline },
-    { phase: "final", inspection: input.final },
-  ]
-    .filter(({ inspection }) => inspection.extractionStatus === "degraded")
-    .map(({ phase, inspection }) =>
-      `${phase} cart extraction was degraded${inspection.extractionDiagnostic ? `: ${inspection.extractionDiagnostic}` : ""}.`,
-    );
+  const baselineExtractionFailed = input.baseline.extractionStatus === "degraded";
+  const baselineExtractionNote = baselineExtractionFailed
+    ? `baseline cart extraction was degraded${input.baseline.extractionDiagnostic ? `: ${input.baseline.extractionDiagnostic}` : ""}.`
+    : null;
+  const finalExtractionNote = input.final.extractionStatus === "degraded"
+    ? `final cart extraction was degraded${input.final.extractionDiagnostic ? `: ${input.final.extractionDiagnostic}` : ""}.`
+    : null;
   const verificationNotes = [
     ...(input.additionalVerificationNotes ?? []),
-    ...extractionNotes,
+    ...(finalExtractionNote ? [finalExtractionNote] : []),
     ...verifyResults(input.results, input.baseline, input.final).map(
       (note) => note.note,
     ),
@@ -164,26 +189,30 @@ export function buildCartReport(input: BuildCartReportInput): CartReport {
   const agentSkips = input.results
     .filter((result) => result.status === "skipped")
     .map((result) => `${result.ingredientId}: ${result.failureReason}`);
-  const notes = [
+  const failureNotes = [
     ...agentFailures,
-    ...agentSkips,
-    ...verificationNotes,
+    ...(baselineExtractionNote ? [baselineExtractionNote] : []),
     ...(input.stopped && input.stopReason ? [input.stopReason] : []),
   ];
   const hasFailed =
     input.stopped === true ||
     agentFailures.length > 0 ||
-    verificationNotes.length > 0;
+    baselineExtractionFailed;
   const hasSkipped = agentSkips.length > 0;
   const runStatus = hasFailed ? "failed" : hasSkipped ? "partial" : "completed";
+  const verificationStatus = baselineExtractionFailed
+    ? "not_run"
+    : verificationNotes.length > 0
+      ? "inconclusive"
+      : "confirmed";
   const selections = input.results.map(asSelection);
 
   return {
     runStatus,
+    verificationStatus,
     requestSha256: input.requestSha256,
     authenticated: input.preflight.authenticated,
     deliveryModeConfirmed: input.preflight.deliveryModeConfirmed,
-    deliveryAddressConfirmed: input.preflight.deliveryAddressConfirmed,
     wholeFoodsStorefrontConfirmed: input.preflight.wholeFoodsStorefrontConfirmed,
     checkoutVisited: input.preflight.checkoutVisited,
     settingsChanged: input.preflight.settingsChanged,
@@ -193,12 +222,17 @@ export function buildCartReport(input: BuildCartReportInput): CartReport {
     finalCartDelta: computeCartDelta(input.baseline.items, input.final.items),
     selections,
     ...(verificationNotes.length > 0 ? { verificationNotes } : {}),
-    failureReason: notes.length > 0 ? notes.join(" ") : null,
+    failureReason:
+      failureNotes.length > 0
+        ? failureNotes.join(" ")
+        : agentSkips.length > 0
+          ? agentSkips.join(" ")
+          : null,
   };
 }
 
 export function buildFailedCartReport(input: {
-  request: GroceryRequest;
+  request: ShoppingList;
   requestSha256: string;
   preflight: AuthReport;
   failureReason: string;
@@ -212,6 +246,7 @@ export function buildFailedCartReport(input: {
           requested: ingredient.request,
           status: "failed",
           productName: null,
+          productId: null,
           packageSize: null,
           quantity: 0,
           price: null,
@@ -226,16 +261,16 @@ export function buildFailedCartReport(input: {
   const baselineItems = [...(input.baselineItems ?? [])];
   return {
     runStatus: "failed",
+    verificationStatus: "not_run",
     requestSha256: input.requestSha256,
     authenticated: input.preflight.authenticated,
     deliveryModeConfirmed: input.preflight.deliveryModeConfirmed,
-    deliveryAddressConfirmed: input.preflight.deliveryAddressConfirmed,
     wholeFoodsStorefrontConfirmed: input.preflight.wholeFoodsStorefrontConfirmed,
     checkoutVisited: input.preflight.checkoutVisited,
     settingsChanged: input.preflight.settingsChanged,
-    baselineCartCount: baselineItems.reduce((total, item) => total + item.quantity, 0),
+    baselineCartCount: getTotalItemCount(baselineItems),
     baselineItems,
-    finalCartCount: baselineItems.reduce((total, item) => total + item.quantity, 0),
+    finalCartCount: getTotalItemCount(baselineItems),
     finalCartDelta: [],
     selections,
     failureReason: input.failureReason,

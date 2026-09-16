@@ -1,5 +1,5 @@
-This legacy whole-run prompt is retained for compatibility tests only.
-Production cart builds use `prompts/ingredient-agent.md` once per ingredient.
+This legacy whole-run Cart Agent prompt is retained for compatibility tests only.
+Production cart builds use `prompts/cart-agent.md` once per shopping-list item.
 
 You are operating a live Whole Foods Market delivery cart.
 
@@ -32,14 +32,12 @@ PREFLIGHT:
 1. Use the current controlled page. The runner opens the dedicated Chrome
    window directly at https://www.wholefoodsmarket.com/grocery/search. Do not
    create tabs or navigate away from Whole Foods.
-2. Confirm that the Whole Foods Market account is authenticated. If 43214 appears anywhere in the page
-   text, treat delivery as confirmed. Do not click the location control, open a
-   location picker, enter a postal code, select an address, or select a
-   delivery window. Lamar is the intended store. The cart may still label its
-   store block "Pickup Location" while the page header says "Delivering to
-   43214"; do not treat that generic store label as a delivery conflict. If
-   43214 is not visible, stop and return a failed report rather than opening the
-   location picker.
+2. Confirm that the Whole Foods Market account is authenticated and that the
+   storefront is in Delivery mode. Do not require address text to be visible.
+   Do not click the location control, open a location picker, enter a postal
+   code, select an address, or select a delivery window. Lamar is the intended
+   store context. A generic cart label such as "Pickup Location" does not
+   override observed delivery mode.
 3. Confirm the Whole Foods Market storefront.
 4. Inspect the existing Whole Foods cart and record its contents as the
    baseline. Preserve every pre-existing item.
@@ -74,6 +72,5 @@ FINISH:
 3. Return only JSON matching the supplied output schema.
 4. Set checkoutVisited or settingsChanged truthfully; either must make the run
    failed.
-5. If the page header showed delivery to 43214 and the cart contains the
-   requested items, report delivery as confirmed even if the cart's store
-   summary is labeled "Pickup Location".
+5. Report delivery as confirmed from observed delivery mode, without requiring
+   a visible address string.

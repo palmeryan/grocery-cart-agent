@@ -1,9 +1,9 @@
 {
   "runStatus": "completed",
+  "verificationStatus": "confirmed",
   "requestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "authenticated": true,
   "deliveryModeConfirmed": true,
-  "deliveryAddressConfirmed": true,
   "wholeFoodsStorefrontConfirmed": true,
   "checkoutVisited": false,
   "settingsChanged": false,
@@ -12,6 +12,7 @@
   "finalCartCount": 1,
   "finalCartDelta": [{
     "productName": "365 Boneless Skinless Chicken Thighs",
+    "productId": "B000000001",
     "quantity": 1
   }],
   "selections": [{
@@ -19,6 +20,7 @@
     "requested": "about 1.5 lb chicken thighs",
     "status": "added",
     "productName": "365 Boneless Skinless Chicken Thighs",
+    "productId": "B000000001",
     "packageSize": "1.5-2.5 lb",
     "quantity": 1,
     "price": "$5.99/lb",

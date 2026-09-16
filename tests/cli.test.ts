@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BrowserLaunchError } from "../src/browser.js";
 import { runCli, withCliSignalHandlers } from "../src/cli.js";
 import type { CodexResult } from "../src/codex.js";
@@ -45,7 +45,7 @@ const lifecycleDependencies = (
 
 const writeValidRequest = (root: string): string => {
   const request = join(root, "request.json");
-  cpSync(new URL("fixtures/valid-request.json", import.meta.url), request);
+  cpSync(new URL("fixtures/valid-shopping-list.json", import.meta.url), request);
   return request;
 };
 
@@ -53,6 +53,14 @@ const loadValidReport = () =>
   JSON.parse(
     readFileSync(
       new URL("fixtures/valid-report.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+const loadValidAuthReport = () =>
+  JSON.parse(
+    readFileSync(
+      new URL("fixtures/valid-auth-report.json", import.meta.url),
       "utf8",
     ),
   );
@@ -89,7 +97,7 @@ describe("cart CLI", () => {
         );
         expect(metadata).toMatchObject({
           model: "gpt-5.6-terra",
-          reasoningEffort: "low",
+          reasoningEffort: "medium",
         });
         writeReport(reportPath, requestSha256);
         return { exitCode: 0, signal: null, timedOut: false };
@@ -104,7 +112,7 @@ describe("cart CLI", () => {
     expect(events).toContain("reserve-port");
   });
 
-  it("runs one ingredient agent per item and performs the cart check only at the boundaries", async () => {
+  it("runs one Cart Agent per item and performs the cart check only at the boundaries", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-ingredients-"));
     const request = writeValidRequest(root);
     const events: string[] = [];
@@ -129,19 +137,20 @@ describe("cart CLI", () => {
               bodyText: "Your cart is empty",
             }
           : {
-              items: [{ productName: "Chicken thighs", quantity: 1 }],
+              items: [{ productName: "Chicken thighs", productId: "B000000001", quantity: 1 }],
               totalItemCount: 1,
               url: "https://www.wholefoodsmarket.com/grocery/cart",
               bodyText: "Chicken thighs\nCurrent quantity: 1",
             };
       },
-      invokeIngredient: async ({ task }) => {
+      invokeCartAgent: async ({ task }) => {
         agentCalls.push(task.ingredient.id);
         return {
           ingredientId: task.ingredient.id,
           requested: task.ingredient.request,
           status: "added",
           productName: "Chicken thighs",
+          productId: "B000000001",
           packageSize: "1.5 lb",
           quantity: 1,
           price: "$9.99",
@@ -160,7 +169,7 @@ describe("cart CLI", () => {
   it("fails before Codex when request validation fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-cli-"));
     const request = join(root, "request.json");
-    cpSync(new URL("fixtures/invalid-request.json", import.meta.url), request);
+    cpSync(new URL("fixtures/invalid-shopping-list.json", import.meta.url), request);
     const events: string[] = [];
     let called = false;
     const exitCode = await runCli(["build", request], {
@@ -191,7 +200,6 @@ describe("cart CLI", () => {
   it.each([
     ["authenticated", { authenticated: false }],
     ["deliveryModeConfirmed", { deliveryModeConfirmed: false }],
-    ["deliveryAddressConfirmed", { deliveryAddressConfirmed: false }],
     ["wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
   ] as const)(
     "returns nonzero when report preflight %s is false",
@@ -302,7 +310,6 @@ describe("cart CLI", () => {
           runStatus: "failed",
           authenticated: false,
           deliveryModeConfirmed: false,
-          deliveryAddressConfirmed: false,
           wholeFoodsStorefrontConfirmed: false,
           failureReason: "not authenticated at Whole Foods",
         });
@@ -759,6 +766,10 @@ describe("cart CLI", () => {
   it("returns 1 when auth-check reports signed out", async () => {
     const root = mkdtempSync(join(tmpdir(), "wfm-auth-fail-"));
     const events: string[] = [];
+    const errors: string[] = [];
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((message) => errors.push(String(message)));
     const exitCode = await runCli(["auth-check"], {
       ...lifecycleDependencies(root, events),
       runDeterministicCheck: async () => {
@@ -776,6 +787,61 @@ describe("cart CLI", () => {
         return report;
       },
     });
+    errorSpy.mockRestore();
+    expect(exitCode).toBe(1);
+    expect(events).not.toContain("chrome-stop");
+    expect(existsSync(join(root, ".wfm-cart.lock"))).toBe(false);
+    expect(errors.join("\n")).toContain(
+      "Auth readiness check failed: Whole Foods Market is signed out",
+    );
+    expect(errors.join("\n")).toContain("Dedicated Chrome left open");
+  });
+
+  it("prints cart readiness failures and leaves Chrome open for manual recovery", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cart-readiness-"));
+    const request = writeValidRequest(root);
+    const events: string[] = [];
+    const errors: string[] = [];
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((message) => errors.push(String(message)));
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      runDeterministicCheck: async () => ({
+        ...loadValidAuthReport(),
+        runStatus: "failed",
+        authenticated: false,
+        failureReason: "authentication (sign-in state detected)",
+      }),
+      inspectCart: async () => {
+        throw new Error("cart inspection must not run when authentication is missing");
+      },
+    });
+    errorSpy.mockRestore();
+
+    expect(exitCode).toBe(1);
+    expect(events).toEqual(["reserve-port", "chrome-start"]);
+    expect(existsSync(join(root, ".wfm-cart.lock"))).toBe(false);
+    expect(errors.join("\n")).toContain(
+      "Cart readiness check failed: authentication (sign-in state detected)",
+    );
+    expect(errors.join("\n")).toContain("Dedicated Chrome left open");
+  });
+
+  it("closes Chrome when the cart preflight crosses a safety boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wfm-cart-safety-"));
+    const request = writeValidRequest(root);
+    const events: string[] = [];
+    const exitCode = await runCli(["build", request], {
+      ...lifecycleDependencies(root, events),
+      runDeterministicCheck: async () => ({
+        ...loadValidAuthReport(),
+        runStatus: "failed",
+        checkoutVisited: true,
+        failureReason: "checkout boundary observed",
+      }),
+    });
+
     expect(exitCode).toBe(1);
     expect(events).toContain("chrome-stop");
   });

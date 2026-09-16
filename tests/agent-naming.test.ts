@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { flattenCartAgentTasks } from "../src/cart-agent.js";
 import { renderCartAgentPrompt, renderIngredientsAgentPrompt } from "../src/prompt.js";
-import type { GroceryRequest } from "../src/types.js";
+import type { ShoppingList } from "../src/types.js";
 
-const request: GroceryRequest = {
+const request: ShoppingList = {
   recipes: [{
     id: "recipe",
     name: "Test recipe",

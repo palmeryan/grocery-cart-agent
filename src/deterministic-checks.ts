@@ -28,20 +28,8 @@ const pageText = async (page: Page): Promise<string> => {
 };
 
 export interface DeliveryContextExpectation {
-  expectedAddressText: string;
   deliveryMode: "delivery";
 }
-
-const normalizeObservationText = (value: string): string =>
-  value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
-
-export const hasDeliveryAddress = (
-  text: string,
-  expectedAddressText = "43214",
-): boolean => {
-  const expected = normalizeObservationText(expectedAddressText);
-  return expected.length > 0 && normalizeObservationText(text).includes(expected);
-};
 
 export const hasDeliveryMode = (
   text: string,
@@ -49,10 +37,6 @@ export const hasDeliveryMode = (
 ): boolean =>
   deliveryMode === "delivery" &&
   /\bdeliver(?:y| to|ing)\b|\bdelivery address\b/i.test(text);
-
-export const isSignedOutPage = (url: string, text: string): boolean =>
-  /\/(?:ap\/)?signin(?:[/?]|$)/i.test(url) ||
-  /sign in to your account|enter your password|create your amazon account|log in with amazon|log in to get started/i.test(text);
 
 export const isWholeFoodsStorefront = (url: string, text: string): boolean => {
   try {
@@ -122,7 +106,6 @@ const failedReport = (
         runStatus: "failed",
         authenticated: false,
         deliveryModeConfirmed: false,
-        deliveryAddressConfirmed: false,
         wholeFoodsStorefrontConfirmed: false,
         checkoutVisited: false,
         settingsChanged: false,
@@ -133,50 +116,88 @@ const failedReport = (
 export const buildAuthReportFromObservation = (
   url: string,
   text: string,
+  authenticated: boolean,
   expectation: DeliveryContextExpectation = {
-    expectedAddressText: "43214",
     deliveryMode: "delivery",
   },
 ): AuthReport => {
-  const authenticated =
-    !isSignedOutPage(url, text) &&
-    /account|deliver to|whole foods/i.test(text);
-  const deliveryAddressConfirmed = hasDeliveryAddress(
-    text,
-    expectation.expectedAddressText,
-  );
   const deliveryModeConfirmed = hasDeliveryMode(text, expectation.deliveryMode);
   const wholeFoodsStorefrontConfirmed = isWholeFoodsStorefront(url, text);
   const completed =
     authenticated &&
     deliveryModeConfirmed &&
-    deliveryAddressConfirmed &&
     wholeFoodsStorefrontConfirmed;
+  const missing = [
+    !authenticated ? "authentication (account API reported signed out)" : null,
+    !deliveryModeConfirmed ? "delivery mode" : null,
+    !wholeFoodsStorefrontConfirmed ? "Whole Foods storefront" : null,
+  ].filter((value): value is string => value !== null);
   return {
     runStatus: completed ? "completed" : "failed",
     authenticated,
     deliveryModeConfirmed,
-    deliveryAddressConfirmed,
     wholeFoodsStorefrontConfirmed,
     checkoutVisited: false,
     settingsChanged: false,
     failureReason: completed
       ? null
-      : "Deterministic preflight could not confirm the signed-in Whole Foods delivery context",
+      : `Deterministic preflight could not confirm: ${missing.join(", ")}`,
   };
+};
+
+export const parseAccountSummaryAuthentication = (value: unknown): boolean => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("customer" in value) ||
+    typeof value.customer !== "object" ||
+    value.customer === null ||
+    !("authenticated" in value.customer) ||
+    typeof value.customer.authenticated !== "boolean"
+  ) {
+    throw new Error("account summary omitted customer.authenticated");
+  }
+  return value.customer.authenticated;
+};
+
+export const readAccountAuthentication = async (page: Page): Promise<boolean> => {
+  try {
+    const endpoint = new URL("/api/account/summary", page.url()).toString();
+    const response = await page.request.get(endpoint, {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok()) {
+      throw new Error(`account summary returned HTTP ${response.status()}`);
+    }
+    return parseAccountSummaryAuthentication(await response.json());
+  } catch (error) {
+    throw new Error(
+      `Could not determine authentication from /api/account/summary: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
 };
 
 const runAuthCheck = async (
   page: Page,
   expectation: DeliveryContextExpectation,
-): Promise<AuthReport> =>
-  buildAuthReportFromObservation(page.url(), await pageText(page), expectation);
+): Promise<AuthReport> => {
+  const [text, authenticated] = await Promise.all([
+    pageText(page),
+    readAccountAuthentication(page),
+  ]);
+  return buildAuthReportFromObservation(
+    page.url(),
+    text,
+    authenticated,
+    expectation,
+  );
+};
 
 export async function runDeterministicCheck(
   kind: "auth-check" | "attachment-check",
   session: OwnedChromeSession,
   expectation: DeliveryContextExpectation = {
-    expectedAddressText: "43214",
     deliveryMode: "delivery",
   },
 ): Promise<AuthReport | AttachmentReport> {
@@ -195,8 +216,11 @@ export async function runDeterministicCheck(
     return kind === "attachment-check"
       ? await runAttachmentCheck(page)
       : await runAuthCheck(page, expectation);
-  } catch {
-    return failedReport(kind);
+  } catch (error) {
+    const report = failedReport(kind);
+    report.failureReason =
+      error instanceof Error ? error.message : String(error);
+    return report;
   } finally {
     await browser?.close().catch(() => undefined);
   }

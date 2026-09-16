@@ -1,17 +1,18 @@
 import { readFileSync } from "node:fs";
 import {
-  compileShoppingPlan,
-  type MealPlanCompileOptions,
-  type MealPlanDraft,
-} from "./meal-plan.js";
+  compileRecipeCompilation,
+  recipeCompilationToShoppingList,
+  type ShoppingListCompileOptions,
+  type IngredientsAgentOutput,
+} from "./shopping-list-compiler.js";
 import { renderIngredientsAgentPrompt } from "./prompt.js";
 import {
   buildIngredientsAgentInvocation,
   runCodex,
   type CodexResult,
 } from "./codex.js";
-import type { ShoppingPlan } from "./types.js";
-import { parseMealPlanDraft } from "./validation.js";
+import type { RecipeCompilation, ShoppingList } from "./types.js";
+import { parseIngredientsAgentOutput } from "./validation.js";
 
 export interface RecipeDocument {
   sourceName: string;
@@ -26,7 +27,7 @@ export interface IngredientsAgentInvocation {
 
 export type InvokeIngredientsAgent = (
   input: IngredientsAgentInvocation,
-) => Promise<MealPlanDraft>;
+) => Promise<IngredientsAgentOutput>;
 
 export interface RunIngredientsAgentInput {
   executable: string;
@@ -37,13 +38,13 @@ export interface RunIngredientsAgentInput {
   stderrPath: string;
   timeoutMs: number;
   documents: readonly RecipeDocument[];
-  options?: MealPlanCompileOptions;
+  options?: ShoppingListCompileOptions;
   signal?: AbortSignal;
 }
 
 /** Ensure the model cannot invent, rename, duplicate, or omit recipe sources. */
 export function assertDraftMatchesDocuments(
-  draft: MealPlanDraft,
+  draft: IngredientsAgentOutput,
   documents: readonly RecipeDocument[],
 ): void {
   const expected = documents.map(({ sourceName }) => sourceName).sort();
@@ -69,7 +70,11 @@ export function assertDraftMatchesDocuments(
 /** Run the real read-only planner agent and compile its JSON output locally. */
 export async function runIngredientsAgent(
   input: RunIngredientsAgentInput,
-): Promise<{ plan: ShoppingPlan; codex: CodexResult }> {
+): Promise<{
+  shoppingList: ShoppingList;
+  recipeCompilation: RecipeCompilation;
+  codex: CodexResult;
+}> {
   const invocation = buildIngredientsAgentInvocation({
     rootDir: input.rootDir,
     outputPath: input.outputPath,
@@ -89,10 +94,12 @@ export async function runIngredientsAgent(
       `Ingredients Agent failed (exit ${codex.exitCode}${codex.signal ? `, ${codex.signal}` : ""})`,
     );
   }
-  const draft = parseMealPlanDraft(readFileSync(input.outputPath, "utf8"));
+  const draft = parseIngredientsAgentOutput(readFileSync(input.outputPath, "utf8"));
   assertDraftMatchesDocuments(draft, input.documents);
+  const recipeCompilation = compileRecipeCompilation(draft, input.options);
   return {
-    plan: compileShoppingPlan(draft, input.options),
+    shoppingList: recipeCompilationToShoppingList(recipeCompilation),
+    recipeCompilation,
     codex,
   };
 }
@@ -104,9 +111,9 @@ export async function runIngredientsAgent(
 export async function compileIngredientsList(
   documents: readonly RecipeDocument[],
   invokeCompiler: InvokeIngredientsAgent,
-  options: MealPlanCompileOptions = {},
+  options: ShoppingListCompileOptions = {},
   signal = new AbortController().signal,
-): Promise<ShoppingPlan> {
+): Promise<ShoppingList> {
   if (documents.length === 0) {
     throw new Error("At least one recipe document is required");
   }
@@ -117,5 +124,5 @@ export async function compileIngredientsList(
   const draft = await invokeCompiler({ prompt, documents, signal });
   if (signal.aborted) throw new Error("Ingredients Agent run was aborted");
   assertDraftMatchesDocuments(draft, documents);
-  return compileShoppingPlan(draft, options);
+  return recipeCompilationToShoppingList(compileRecipeCompilation(draft, options));
 }

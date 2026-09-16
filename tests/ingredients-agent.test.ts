@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertShoppingPlanIntegrity, compileShoppingPlan, type MealPlanDraft } from "../src/meal-plan.js";
-import { compileRecipeDocuments } from "../src/meal-plan-agent.js";
+import { assertRecipeCompilationIntegrity, compileRecipeCompilation, type IngredientsAgentOutput } from "../src/shopping-list-compiler.js";
+import { compileIngredientsList } from "../src/ingredients-agent.js";
 import type { RecipeIngredientQuantity } from "../src/types.js";
-import { parseMealPlanDraft, parseShoppingPlan } from "../src/validation.js";
+import { parseIngredientsAgentOutput, parseRecipeCompilation } from "../src/validation.js";
 
 const quantity = (
   value: number,
@@ -20,7 +20,7 @@ const amount = (
 const line = (
   sourceText: string,
   name: string,
-  overrides: Partial<MealPlanDraft["recipes"][number]["ingredients"][number]> = {},
+  overrides: Partial<IngredientsAgentOutput["recipes"][number]["ingredients"][number]> = {},
 ) => ({
   sourceText,
   name,
@@ -34,23 +34,23 @@ const line = (
   ...overrides,
 });
 
-describe("meal-plan compiler", () => {
+describe("Ingredients Agent deterministic compiler", () => {
   it("accepts only the minimal model contract", () => {
     const draft = { recipes: [{ sourceName: "recipe.md", ingredients: [line(
       "2–3 limes",
       "lime",
       { amount: amount("2–3 limes", quantity(2, "limes", 3)) },
     )] }] };
-    expect(parseMealPlanDraft(JSON.stringify(draft))).toEqual(draft);
-    expect(() => parseMealPlanDraft(JSON.stringify({
+    expect(parseIngredientsAgentOutput(JSON.stringify(draft))).toEqual(draft);
+    expect(() => parseIngredientsAgentOutput(JSON.stringify({
       ...draft,
       recipes: [{ ...draft.recipes[0], recipeId: "model-id", title: "Model title" }],
       decisionLog: [],
-    }))).toThrow(/invalid meal plan draft/i);
+    }))).toThrow(/invalid Ingredients Agent output/i);
   });
 
   it("sums compatible additive quantities while preserving source quantities", () => {
-    const plan = compileShoppingPlan({ recipes: [
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "one.md", ingredients: [line("2 garlic cloves", "garlic", {
         amount: amount("2 garlic cloves", quantity(2, "cloves")),
       })] },
@@ -65,7 +65,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("combines package totals with loose weight", () => {
-    const plan = compileShoppingPlan({ recipes: [
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "bags.md", ingredients: [line("2 (12-ounce) bags frozen peas", "frozen peas", {
         amount: amount("2 (12-ounce) bags", quantity(2, "bags"), quantity(24, "ounces")),
       })] },
@@ -77,7 +77,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("combines source-supported approximate equivalents", () => {
-    const plan = compileShoppingPlan({ recipes: [
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "count.md", ingredients: [line("4 thighs (about 1½ pounds)", "bone-in chicken thighs", {
         amount: amount("4 thighs (about 1½ pounds)", quantity(4, "thighs"), quantity(1.5, "pounds", null, true)),
       })] },
@@ -89,7 +89,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("preserves and sums ranges", () => {
-    const plan = compileShoppingPlan({ recipes: [
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("2–3 limes", "lime", {
         amount: amount("2–3 limes", quantity(2, "limes", 3)),
       })] },
@@ -101,7 +101,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("retains incompatible amounts without fabricating a total", () => {
-    const plan = compileShoppingPlan({ recipes: [
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("mint for serving", "fresh mint")] },
       { sourceName: "b.md", ingredients: [line("½ cup mint", "fresh mint", {
         amount: amount("½ cup", quantity(0.5, "cup")),
@@ -116,8 +116,8 @@ describe("meal-plan compiler", () => {
       { sourceName: "a.md", ingredients: [line("Crushed red pepper", "crushed red pepper")] },
       { sourceName: "b.md", ingredients: [line("red-pepper flakes", "crushed red pepper")] },
     ];
-    const first = compileShoppingPlan({ recipes: sources });
-    const renamed = compileShoppingPlan({ recipes: sources.map((recipe) => ({
+    const first = compileRecipeCompilation({ recipes: sources });
+    const renamed = compileRecipeCompilation({ recipes: sources.map((recipe) => ({
       ...recipe,
       ingredients: recipe.ingredients.map((ingredient) => ({ ...ingredient, name: "red pepper flakes" })),
     })) });
@@ -127,10 +127,10 @@ describe("meal-plan compiler", () => {
   });
 
   it("ignores incidental boundary whitespace in source membership IDs", () => {
-    const clean = compileShoppingPlan({ recipes: [
+    const clean = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("2½ cups chicken stock", "chicken broth")] },
     ] });
-    const padded = compileShoppingPlan({ recipes: [
+    const padded = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("  2½ cups chicken stock ", "chicken broth")] },
     ] });
     expect(clean.purchaseIntents[0]?.id).toBe(padded.purchaseIntents[0]?.id);
@@ -138,8 +138,8 @@ describe("meal-plan compiler", () => {
   });
 
   it("changes an intent ID when its source membership changes", () => {
-    const first = compileShoppingPlan({ recipes: [{ sourceName: "a.md", ingredients: [line("salt", "salt")] }] });
-    const second = compileShoppingPlan({ recipes: [
+    const first = compileRecipeCompilation({ recipes: [{ sourceName: "a.md", ingredients: [line("salt", "salt")] }] });
+    const second = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("salt", "salt")] },
       { sourceName: "b.md", ingredients: [line("salt", "salt")] },
     ] });
@@ -147,7 +147,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("buys uncertain pantry items and reports the source", () => {
-    const plan = compileShoppingPlan({ recipes: [{ sourceName: "soup.md", ingredients: [
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "soup.md", ingredients: [
       line("seasoning blend", "seasoning blend", { pantryStatus: "uncertain" }),
     ] }] });
     expect(plan.purchaseIntents[0]?.disposition).toBe("buy");
@@ -159,7 +159,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("reports consolidated pantry uncertainty once and never claims an omitted optional is bought", () => {
-    const plan = compileShoppingPlan({ recipes: [
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "one.md", ingredients: [line("seasoning blend", "seasoning blend", { pantryStatus: "uncertain" })] },
       { sourceName: "two.md", ingredients: [line("seasoning blend", "seasoning blends", { pantryStatus: "uncertain" })] },
       { sourceName: "three.md", ingredients: [line("finishing oil, optional", "finishing oil", {
@@ -176,7 +176,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("reports optional and pantry omissions while retaining every source", () => {
-    const plan = compileShoppingPlan({ recipes: [{ sourceName: "soup.md", ingredients: [
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "soup.md", ingredients: [
       line("salt", "salt", { pantryStatus: "assume_pantry" }),
       line("fresh dill, optional", "fresh dill", { optional: true }),
     ] }] });
@@ -189,7 +189,7 @@ describe("meal-plan compiler", () => {
   });
 
   it("gives split components unique source references while retaining the full line", () => {
-    const plan = compileShoppingPlan({ recipes: [{ sourceName: "seasoning.md", ingredients: [
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "seasoning.md", ingredients: [
       line("Salt and black pepper", "salt"),
       line("Salt and black pepper", "black pepper"),
     ] }] });
@@ -201,27 +201,27 @@ describe("meal-plan compiler", () => {
   });
 
   it("rejects broken cross-references and round-trips the strict plan schema", () => {
-    const plan = compileShoppingPlan({ recipes: [{ sourceName: "soup.md", ingredients: [line("salt", "salt")] }] });
-    expect(parseShoppingPlan(JSON.stringify(plan))).toEqual(plan);
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "soup.md", ingredients: [line("salt", "salt")] }] });
+    expect(parseRecipeCompilation(JSON.stringify(plan))).toEqual(plan);
     plan.recipes[0]!.ingredients[0]!.purchaseIntentId = "intent-0000000000000000";
-    expect(() => assertShoppingPlanIntegrity(plan)).toThrow(/invalid source reference|valid purchase intent/);
+    expect(() => assertRecipeCompilationIntegrity(plan)).toThrow(/invalid source reference|valid purchase intent/);
   });
 });
 
 describe("recipe-document compiler seam", () => {
   it("validates exact recipe and line provenance", async () => {
     const documents = [{ sourceName: "one.md", text: "2 apples" }];
-    const plan = await compileRecipeDocuments(documents, async () => ({ recipes: [{
+    const shoppingList = await compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "one.md",
       ingredients: [line("2 apples", "apple", { amount: amount("2 apples", quantity(2, "apples")) })],
     }] }));
-    expect(plan.purchaseIntents[0]?.additiveAmount?.quantity).toBe(2);
+    expect(shoppingList.recipes[0]?.ingredients[0]?.request).toContain("2 apples");
 
-    await expect(compileRecipeDocuments(documents, async () => ({ recipes: [{
+    await expect(compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "renamed.md",
       ingredients: [line("2 apples", "apple")],
     }] }))).rejects.toThrow(/sources do not match/);
-    await expect(compileRecipeDocuments(documents, async () => ({ recipes: [{
+    await expect(compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "one.md",
       ingredients: [line("apples", "apple")],
     }] }))).rejects.toThrow(/complete verbatim line/);
@@ -229,7 +229,7 @@ describe("recipe-document compiler seam", () => {
 
   it("rejects empty recipe input before invoking the agent", async () => {
     let called = false;
-    await expect(compileRecipeDocuments([], async () => {
+    await expect(compileIngredientsList([], async () => {
       called = true;
       throw new Error("should not run");
     })).rejects.toThrow(/at least one recipe document/i);

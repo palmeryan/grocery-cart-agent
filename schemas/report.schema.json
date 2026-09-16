@@ -4,10 +4,10 @@
   "additionalProperties": false,
   "required": [
     "runStatus",
+    "verificationStatus",
     "requestSha256",
     "authenticated",
     "deliveryModeConfirmed",
-    "deliveryAddressConfirmed",
     "wholeFoodsStorefrontConfirmed",
     "checkoutVisited",
     "settingsChanged",
@@ -23,10 +23,13 @@
       "type": "string",
       "enum": ["completed", "partial", "failed"]
     },
+    "verificationStatus": {
+      "type": "string",
+      "enum": ["confirmed", "inconclusive", "not_run"]
+    },
     "requestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "authenticated": { "type": "boolean" },
     "deliveryModeConfirmed": { "type": "boolean" },
-    "deliveryAddressConfirmed": { "type": "boolean" },
     "wholeFoodsStorefrontConfirmed": { "type": "boolean" },
     "checkoutVisited": { "type": "boolean" },
     "settingsChanged": { "type": "boolean" },
@@ -39,7 +42,8 @@
         "required": ["productName", "quantity"],
         "properties": {
           "productName": { "type": "string", "minLength": 1 },
-          "quantity": { "type": "integer", "minimum": 1 }
+          "productId": { "type": "string", "pattern": "^[A-Za-z0-9]{10}$" },
+          "quantity": { "type": "number", "exclusiveMinimum": 0 }
         }
       }
     },
@@ -52,7 +56,8 @@
         "required": ["productName", "quantity"],
         "properties": {
           "productName": { "type": "string", "minLength": 1 },
-          "quantity": { "type": "integer", "minimum": 1 }
+          "productId": { "type": "string", "pattern": "^[A-Za-z0-9]{10}$" },
+          "quantity": { "type": "number", "exclusiveMinimum": 0 }
         }
       }
     },
@@ -66,6 +71,7 @@
           "requested",
           "status",
           "productName",
+          "productId",
           "packageSize",
           "quantity",
           "price",
@@ -80,6 +86,7 @@
             "enum": ["added", "already_present", "skipped"]
           },
           "productName": { "type": ["string", "null"] },
+          "productId": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9]{10}$" },
           "packageSize": { "type": ["string", "null"] },
           "quantity": { "type": "integer", "minimum": 0 },
           "price": { "type": ["string", "null"] },

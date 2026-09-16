@@ -9,12 +9,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CART_MODEL,
-  CART_REASONING_EFFORT,
-  MEAL_PLAN_MODEL,
-  MEAL_PLAN_REASONING_EFFORT,
+  CART_AGENT_MODEL,
+  CART_AGENT_REASONING_EFFORT,
+  INGREDIENTS_AGENT_MODEL,
+  INGREDIENTS_AGENT_REASONING_EFFORT,
   buildCodexInvocation,
-  buildMealPlanCompilerInvocation,
+  buildIngredientsAgentInvocation,
+  codexEventsContainPlaywrightCall,
   createKillEscalation,
   runCodex,
 } from "../src/codex.js";
@@ -29,6 +30,28 @@ const processAlive = (pid: number): boolean => {
 };
 
 describe("Codex invocation", () => {
+  it("detects actual Playwright tool calls in Codex event logs", () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-events-"));
+    const eventsPath = join(runDir, "events.jsonl");
+    writeFileSync(
+      eventsPath,
+      [
+        JSON.stringify({ type: "turn.started" }),
+        JSON.stringify({
+          type: "item.started",
+          item: {
+            type: "mcp_tool_call",
+            server: "playwright",
+            tool: "browser_snapshot",
+          },
+        }),
+      ].join("\n"),
+    );
+    expect(codexEventsContainPlaywrightCall(eventsPath)).toBe(true);
+    writeFileSync(eventsPath, `${JSON.stringify({ type: "turn.completed" })}\n`);
+    expect(codexEventsContainPlaywrightCall(eventsPath)).toBe(false);
+  });
+
   it("uses a read-only sandbox and never bypasses approvals", () => {
     const invocation = buildCodexInvocation({
       rootDir: "/repo",
@@ -40,9 +63,9 @@ describe("Codex invocation", () => {
     });
     const joined = invocation.args.join(" ");
     expect(invocation.args).toContain("--model");
-    expect(invocation.args).toContain(CART_MODEL);
+    expect(invocation.args).toContain(CART_AGENT_MODEL);
     expect(invocation.args).toContain(
-      `model_reasoning_effort="${CART_REASONING_EFFORT}"`,
+      `model_reasoning_effort="${CART_AGENT_REASONING_EFFORT}"`,
     );
     expect(invocation.args).toContain("--sandbox");
     expect(invocation.args).toContain("read-only");
@@ -62,8 +85,10 @@ describe("Codex invocation", () => {
       'mcp_servers.playwright.command="/repo/node_modules/.bin/playwright-mcp"',
     );
     expect(joined).toContain(
-      'mcp_servers.playwright.args=["--cdp-endpoint","http://127.0.0.1:45678","--output-dir","/repo/runs/id/browser","--caps=devtools"]',
+      'mcp_servers.playwright.args=["--cdp-endpoint","http://127.0.0.1:45678","--output-dir","/repo/runs/id/browser","--caps=devtools","--snapshot-mode","none","--image-responses","omit"]',
     );
+    expect(joined).toContain('--snapshot-mode","none');
+    expect(joined).toContain('--image-responses","omit');
     expect(joined).not.toContain("--browser=chrome");
     expect(joined).toContain("--cdp-endpoint");
     expect(joined).not.toContain("--storage-state");
@@ -83,21 +108,21 @@ describe("Codex invocation", () => {
     expect(invocation.args.at(-1)).toBe("-");
   });
 
-  it("builds a read-only planner invocation without browser or MCP settings", () => {
-    const invocation = buildMealPlanCompilerInvocation({
+  it("builds a read-only Ingredients Agent invocation without browser or MCP settings", () => {
+    const invocation = buildIngredientsAgentInvocation({
       rootDir: "/repo",
-      outputPath: "/repo/runs/id/meal-plan-draft.json",
-      schemaPath: "/repo/schemas/meal-plan-draft.schema.json",
+      outputPath: "/repo/runs/id/ingredients-agent-output.json",
+      schemaPath: "/repo/schemas/ingredients-agent-output.schema.json",
     });
     const joined = invocation.args.join(" ");
     expect(invocation.args).toContain("--output-schema");
-    expect(invocation.args).toContain("/repo/schemas/meal-plan-draft.schema.json");
+    expect(invocation.args).toContain("/repo/schemas/ingredients-agent-output.schema.json");
     expect(invocation.args).toContain("--output-last-message");
-    expect(invocation.args).toContain("/repo/runs/id/meal-plan-draft.json");
+    expect(invocation.args).toContain("/repo/runs/id/ingredients-agent-output.json");
     expect(invocation.args).toContain("read-only");
-    expect(invocation.args).toContain(MEAL_PLAN_MODEL);
+    expect(invocation.args).toContain(INGREDIENTS_AGENT_MODEL);
     expect(invocation.args).toContain(
-      `model_reasoning_effort="${MEAL_PLAN_REASONING_EFFORT}"`,
+      `model_reasoning_effort="${INGREDIENTS_AGENT_REASONING_EFFORT}"`,
     );
     expect(invocation.args.at(-1)).toBe("-");
     expect(joined).not.toContain("playwright");
@@ -182,7 +207,9 @@ describe("Codex process", () => {
       prompt: "test",
       eventsPath: join(runDir, "events.jsonl"),
       stderrPath: join(runDir, "stderr.log"),
-      timeoutMs: 100,
+      // Allow the descendant to install its SIGTERM handler and write the
+      // readiness marker before exercising the kill escalation.
+      timeoutMs: 500,
       killGraceMs,
     });
     expect(result.timedOut).toBe(true);
