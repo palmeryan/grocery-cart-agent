@@ -10,6 +10,8 @@ Replace the per-ingredient LLM browser agent with a harness-operated storefront 
 
 The model does not locate text fields, type, click, navigate, inspect an add it just made, or report that an add succeeded. A verified cart mutation is the completion event for an addition.
 
+This is a local, single-operator tool. A Whole Foods page change may stop a run; the intended recovery is for the operator to inspect the run evidence, update the harness, and retry only after establishing the cart's actual state. Unattended recovery and automatic adaptation are not requirements.
+
 ## Why change
 
 Today `src/cli.ts` launches a fresh Codex process with Playwright MCP for each ingredient. The prompt in `prompts/cart-agent.md` asks the model to search, inspect, choose, click, and return an `added` result. `src/cart-network.ts` observes full-cart POSTs, but `src/cli.ts` reconciles them only **after** the agent exits. This spends model turns on mechanical page operations and on describing an outcome the harness can observe directly.
@@ -30,7 +32,7 @@ The harness already connects to the owned Chrome instance through Playwright/CDP
 
 - No checkout or order submission.
 - No new deterministic rule that chooses products for the model.
-- No general-purpose browser agent fallback when an interaction is unsupported.
+- No browser-agent handoff, self-updating interaction config, or automatic repair when an interaction is unsupported.
 - No change to the Ingredients Agent or recipe compiler in the first implementation slice.
 - No assumption that a successful click, HTTP 200 alone, or model output proves cart contents.
 
@@ -78,13 +80,19 @@ Do not tie correctness to one CSS selector or a model-generated click reference.
 ## Failure and retry behavior
 
 - **No results or poor results:** the model may requery within a fixed budget, then skip with a reason. The harness never substitutes a product on its own.
-- **Unknown variant or quantity control:** present the options to the model if a choice is required; otherwise stop with `unsupported_interaction`. Do not hand the browser over to a generic agent.
+- **Unknown variant or quantity control:** present the options to the model if the harness can still operate the controls and only a choice is missing; otherwise stop with `unsupported_interaction` and diagnostic evidence.
 - **Ambiguous cart response, unrelated cart delta, or missing response:** stop the current queue. Re-read the cart to establish actual state before deciding whether a retry is safe.
 - **Model timeout/invalid output:** retry the decision call only, within a small bound. No browser mutation has occurred at that point.
 - **Add interaction timeout:** do not repeat the click until cart state is established. A timed-out click may still have committed.
 - **Authentication or delivery-context change:** stop; do not let the model repair account or fulfillment settings.
 
 Use concrete outcome names in implementation and diagnostics. Avoid a generic `safe` flag that conflates navigation, cart verification, and executor errors.
+
+### Operator diagnostic contract
+
+On a stopped run, print the failed ingredient, failed stage (search, extraction, decision, interaction, or cart confirmation), and run-artifact path. Save enough local evidence to diagnose a site change without repeating the add: current URL, timestamp, last completed harness action, the selected candidate/quantity if any, a bounded page snapshot or screenshot, relevant element/control observations, the model decision, baseline cart, and the latest parsed cart response or parse error. Keep run artifacts gitignored and avoid writing credentials or full account responses. If an add may have committed, report that explicitly and leave the owned browser available for inspection; do not automatically click again.
+
+The operating standard is **clear failure with recoverable evidence**, not automatic completion across arbitrary WFM changes. After fixing an adapter, add the observed page shape as a regression fixture before retrying the shopping run.
 
 ## Implementation sequence
 
@@ -98,7 +106,7 @@ Keep these as reviewable increments, with a line-count/scope audit before mergin
 
 ## Verification and acceptance
 
-Automated fixtures should cover exact products, substitutions, no suitable item, already-present items, multiple sizes, weighted/quantity-selector products, unavailable cards, stale candidate IDs, search retry, model timeout, click timeout, delayed POST, malformed/partial cart payload, unrelated cart changes, and a committed add whose response arrives after a UI timeout. Assert that the model cannot call browser tools or claim `added`, that the executor cannot click a candidate not in the current observation, and that a successful mutation advances the queue without another model call.
+Automated fixtures should cover exact products, substitutions, no suitable item, already-present items, multiple sizes, weighted/quantity-selector products, unavailable cards, stale candidate IDs, search retry, model timeout, click timeout, delayed POST, malformed/partial cart payload, unrelated cart changes, and a committed add whose response arrives after a UI timeout. Assert that the model cannot call browser tools or claim `added`, that the executor cannot click a candidate not in the current observation, and that a successful mutation advances the queue without another model call. Changed labels or card structure should either still work or stop with the diagnostic contract above; silent misselection is unacceptable.
 
 Use captured storefront evidence to check decision quality, not only JSON validity. Then run a supervised live smoke on the dedicated profile with a small, known Shopping List: inspect the baseline first, verify the selected product and quantity, watch the mutation, and compare the final cart. Stop before checkout. A passing unit suite or CDP attachment check is not live cart acceptance.
 
