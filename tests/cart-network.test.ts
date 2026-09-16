@@ -5,7 +5,6 @@ import {
   CartNetworkObserver,
   getSuccessfulFullCartPost,
   parseCartNetworkSnapshot,
-  reconcileCartAgentResult,
 } from "../src/cart-network.js";
 
 describe("parseCartNetworkSnapshot", () => {
@@ -50,15 +49,127 @@ describe("parseCartNetworkSnapshot", () => {
     const postRecords = await observer.waitForFullCartPost(50);
     const snapshot = getSuccessfulFullCartPost(postRecords);
     expect(snapshot?.items).toEqual([{ asin: "B012345678", quantity: 1 }]);
-    expect(reconcileCartAgentResult([], snapshot!, {
-      status: "added", productId: "B012345678", quantity: 1,
-    }).matched).toBe(true);
-    expect(reconcileCartAgentResult(snapshot!.items, snapshot!, {
-      status: "already_present", productId: "B012345678", quantity: 1,
-    }).matched).toBe(true);
-    expect(reconcileCartAgentResult([], snapshot!, {
-      status: "skipped", productId: null, quantity: 0,
-    }).matched).toBe(false);
+    observer.dispose();
+  });
+
+  it("confirms only the armed ASIN's exact positive delta", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    const response = (status: number, items: unknown[]): Response => ({
+      url: () => "https://www.wholefoodsmarket.com/api/cartcache",
+      request: () => ({ method: () => "POST" }),
+      status: () => status,
+      text: async () => JSON.stringify({ carts: [{ items }] }),
+    }) as unknown as Response;
+
+    await observer.beginMutation([
+      { asin: "A", quantity: 1 },
+      { asin: "B", quantity: 2 },
+    ]);
+    // WFM may emit an unchanged cart response before the committing response.
+    events.emit("response", response(200, [
+      { asin: "A", quantity: 1 },
+      { asin: "B", quantity: 2 },
+    ]));
+    events.emit("response", response(200, [
+      { asin: "A", quantity: 1.5 },
+      { asin: "B", quantity: 2 },
+    ]));
+    await expect(observer.waitForMutation({ asin: "a", expectedQuantity: 0.5, timeoutMs: 50 }))
+      .resolves.toMatchObject({ status: "confirmed", delta: 0.5 });
+    observer.dispose();
+  });
+
+  it("accepts any positive selected-ASIN delta for a weighted purchase", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    const response = {
+      url: () => "https://www.wholefoodsmarket.com/api/cartcache",
+      request: () => ({ method: () => "POST" }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{ items: [{ asin: "WEIGHTED", quantity: 0.25 }] }] }),
+    } as unknown as Response;
+    await observer.beginMutation([]);
+    events.emit("response", response);
+    await expect(observer.waitForMutation({ asin: "weighted", expectedQuantity: "positive", timeoutMs: 50 }))
+      .resolves.toMatchObject({ status: "confirmed", delta: 0.25 });
+    observer.dispose();
+  });
+
+  it("waits through intermediate unit increases until the requested delta", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    const response = (quantity: number): Response => ({
+      url: () => "https://www.wholefoodsmarket.com/api/cartcache",
+      request: () => ({ method: () => "POST" }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{ items: [{ asin: "B012345678", quantity }] }] }),
+    }) as unknown as Response;
+    await observer.beginMutation([]);
+    events.emit("response", response(1));
+    events.emit("response", response(2));
+    await expect(observer.waitForMutation({ asin: "B012345678", expectedQuantity: 2, timeoutMs: 50 }))
+      .resolves.toMatchObject({ status: "confirmed", delta: 2 });
+    observer.dispose();
+  });
+
+  it("reports a partial quantity increase as unknown rather than success", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    await observer.beginMutation([]);
+    events.emit("response", {
+      url: () => "https://www.wholefoodsmarket.com/api/cartcache",
+      request: () => ({ method: () => "POST" }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{ items: [{ asin: "B012345678", quantity: 1 }] }] }),
+    } as unknown as Response);
+    await expect(observer.waitForMutation({ asin: "B012345678", expectedQuantity: 2, timeoutMs: 20 }))
+      .resolves.toMatchObject({ status: "unknown", delta: 1, diagnostic: expect.stringContaining("stopped at 1") });
+    observer.dispose();
+  });
+
+  it("distinguishes a clean no-op from an unknown or unrelated cart effect", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    const response = (items: unknown[]): Response => ({
+      url: () => "https://www.wholefoodsmarket.com/api/cartcache",
+      request: () => ({ method: () => "POST" }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{ items }] }),
+    }) as unknown as Response;
+
+    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
+    events.emit("response", response([{ asin: "A", quantity: 1 }]));
+    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 50 }))
+      .resolves.toMatchObject({ status: "no_mutation", delta: 0 });
+
+    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
+    events.emit("response", response([
+      { asin: "A", quantity: 2 },
+      { asin: "B", quantity: 1 },
+    ]));
+    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 50 }))
+      .resolves.toMatchObject({ status: "unknown", delta: 1 });
+
+    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
+    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 5 }))
+      .resolves.toMatchObject({ status: "unknown", snapshot: null });
+    observer.dispose();
+  });
+
+  it("does not consume a response that arrived before the mutation boundary", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    const response = (quantity: number): Response => ({
+      url: () => "https://www.wholefoodsmarket.com/api/cartcache",
+      request: () => ({ method: () => "POST" }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{ items: [{ asin: "A", quantity }] }] }),
+    }) as unknown as Response;
+    events.emit("response", response(2));
+    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
+    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 5 }))
+      .resolves.toMatchObject({ status: "unknown", snapshot: null });
     observer.dispose();
   });
 });

@@ -20,6 +20,11 @@ The harness already connects to the owned Chrome instance through Playwright/CDP
 
 ## First-build scope
 
+Implementation status (2026-09-16): the harness/decision path is built and the
+old browser-enabled cart agent path is removed. Automated checks pass; live
+Whole Foods cart acceptance and before/after speed/cost comparison are still
+pending.
+
 Keep the existing Shopping List, Ingredients Agent, browser ownership, authentication, and final report. Replace only the cart middle: search and add are harness operations; product and quantity choice remain model judgments. Process ingredients sequentially in one browser, with one final cart check. Do not enter checkout or change account/fulfillment settings. Do not build browser-agent recovery, a persistent site-interaction config, or automatic repair. Compare latency and tokens with the current runner after a live smoke; speedup is a hypothesis, not an acceptance substitute for correct cart contents.
 
 ## Responsibility boundary
@@ -67,7 +72,7 @@ The operating standard is **clear failure with recoverable evidence**, not autom
 1. Build the search/result-card adapter and compare its output with saved MCP result-card evidence.
 2. Add the model decision schema and invocation without browser tools.
 3. Add the ASIN-targeted executor, cart-response completion, and failure artifacts; integrate them into the existing sequential runner.
-4. After live acceptance, remove the old cart-agent prompt/MCP path and update docs and usage accounting. Do not keep two production cart paths.
+4. Remove the old cart-agent prompt/MCP path and update docs and usage accounting before live acceptance. Do not keep two production cart paths.
 
 Keep these as reviewable increments, with a line-count/scope audit before merging a large implementation.
 

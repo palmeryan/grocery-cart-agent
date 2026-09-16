@@ -1,10 +1,8 @@
-import { createWriteStream, readFileSync, type WriteStream } from "node:fs";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
 /** Default model settings for reproducible agent runs. */
-export const CART_AGENT_MODEL = "gpt-5.6-terra" as const;
-export const CART_AGENT_REASONING_EFFORT = "medium" as const;
 export const INGREDIENTS_AGENT_MODEL = "gpt-5.6-terra" as const;
 export const INGREDIENTS_AGENT_REASONING_EFFORT = "medium" as const;
 
@@ -21,17 +19,6 @@ export const REASONING_EFFORTS = [
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
-export interface CodexInvocationInput {
-  rootDir: string;
-  browserOutputDir: string;
-  reportPath: string;
-  schemaPath: string;
-  playwrightMcpBin: string;
-  remoteDebuggingPort: number;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-}
-
 export interface CodexInvocation {
   args: string[];
 }
@@ -46,26 +33,6 @@ export interface CodexResult {
   exitCode: number;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
-}
-
-/** Confirm from the JSON event stream that the agent actually used Playwright. */
-export function codexEventsContainPlaywrightCall(path: string): boolean {
-  try {
-    return readFileSync(path, "utf8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .some((line) => {
-        const event = JSON.parse(line) as {
-          item?: { type?: unknown; server?: unknown };
-        };
-        return (
-          event.item?.type === "mcp_tool_call" &&
-          event.item.server === "playwright"
-        );
-      });
-  } catch {
-    return false;
-  }
 }
 
 export interface RunCodexInput {
@@ -84,64 +51,6 @@ export interface RunCodexInput {
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const POST_KILL_REAP_MS = 1_000;
 const REAP_POLL_MS = 25;
-
-export function buildCodexInvocation(
-  input: CodexInvocationInput,
-): CodexInvocation {
-  const model = input.model ?? CART_AGENT_MODEL;
-  const reasoningEffort = input.reasoningEffort ?? CART_AGENT_REASONING_EFFORT;
-  const mcpArgs = [
-    "--cdp-endpoint",
-    `http://127.0.0.1:${input.remoteDebuggingPort}`,
-    "--output-dir",
-    input.browserOutputDir,
-    "--caps=devtools",
-    "--snapshot-mode",
-    "none",
-    "--image-responses",
-    "omit",
-  ];
-  return {
-    args: [
-      "exec",
-      "--model",
-      model,
-      "-c",
-      `model_reasoning_effort="${reasoningEffort}"`,
-      "--ignore-user-config",
-      "--strict-config",
-      "--ephemeral",
-      "--sandbox",
-      "read-only",
-      "--json",
-      "--output-schema",
-      input.schemaPath,
-      "--output-last-message",
-      input.reportPath,
-      "--cd",
-      input.rootDir,
-      "-c",
-      'approval_policy="never"',
-      "-c",
-      `log_dir=${JSON.stringify(input.browserOutputDir)}`,
-      "-c",
-      `mcp_servers.playwright.command=${JSON.stringify(input.playwrightMcpBin)}`,
-      "-c",
-      `mcp_servers.playwright.args=${JSON.stringify(mcpArgs)}`,
-      "-c",
-      "mcp_servers.playwright.enabled=true",
-      "-c",
-      "mcp_servers.playwright.required=true",
-      "-c",
-      "mcp_servers.playwright.default_tools_approval_mode=\"approve\"",
-      "-c",
-      "mcp_servers.playwright.startup_timeout_sec=30",
-      "-c",
-      "mcp_servers.playwright.tool_timeout_sec=120",
-      "-",
-    ],
-  };
-}
 
 /** Build a read-only Ingredients Agent invocation for recipe interpretation without MCP. */
 export function buildIngredientsAgentInvocation(

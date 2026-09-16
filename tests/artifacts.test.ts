@@ -18,7 +18,6 @@ describe("artifact paths", () => {
     expect(paths.kind).toBe("build");
     expect(paths.runId).toBe("2026-09-12T12-34-56-000Z");
     expect(paths.reportPath).toContain("/runs/");
-    expect(paths.browserOutputDir).toContain("/browser");
   });
 
   it("creates an auth-check run without requiring a request path", () => {
@@ -30,7 +29,6 @@ describe("artifact paths", () => {
     );
     expect(paths.kind).toBe("auth-check");
     expect(paths.reportPath).toContain("/runs/");
-    expect(paths.browserOutputDir).toContain("/browser");
   });
 
   it("hashes equivalent nested requests identically", () => {
@@ -55,7 +53,7 @@ describe("configuration", () => {
     expect(sha256("same")).toHaveLength(64);
   });
 
-  it("configures owned Chrome and the local MCP binary", () => {
+  it("configures owned Chrome", () => {
     const config = loadConfig(
       {
         HOME: "/Users/test",
@@ -68,8 +66,5 @@ describe("configuration", () => {
     );
     expect(config.chromeStartupTimeoutMs).toBe(15_000);
     expect(config.chromeStopTimeoutMs).toBe(10_000);
-    expect(config.playwrightMcpBin).toBe(
-      "/repo/node_modules/.bin/playwright-mcp",
-    );
   });
 });

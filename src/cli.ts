@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { Browser, Page } from "playwright";
 import {
   canonicalShoppingList,
   createRunPaths,
@@ -28,10 +29,6 @@ import {
   type DeliveryContextExpectation,
 } from "./deterministic-checks.js";
 import {
-  buildCodexInvocation,
-  CART_AGENT_MODEL,
-  CART_AGENT_REASONING_EFFORT,
-  codexEventsContainPlaywrightCall,
   INGREDIENTS_AGENT_MODEL,
   INGREDIENTS_AGENT_REASONING_EFFORT,
   REASONING_EFFORTS,
@@ -41,28 +38,23 @@ import {
 import { loadConfig } from "./config.js";
 import {
   CartNetworkObserver,
-  getSuccessfulFullCartPost,
-  reconcileCartAgentResult,
-  type CartNetworkItem,
   type CartNetworkSnapshot,
 } from "./cart-network.js";
+import { DECISION_MODEL, DECISION_REASONING_EFFORT, buildDecisionInvocation, parseAndValidateDecision, renderDecisionPrompt } from "./cart-decision.js";
+import { cartTasks, runCartFlow, type CartFlowResult } from "./cart-flow.js";
 import { runIngredientsAgent, type RecipeDocument } from "./ingredients-agent.js";
 import {
   createPlaywrightCartPageAdapter,
   inspectCartState,
   type CartInspectionResult,
 } from "./cart-state.js";
-import {
-  flattenCartAgentTasks,
-  runCartAgentTasks,
-  type CartAgentTask,
-} from "./cart-agent.js";
 import { acquireRunLock, type RunLock } from "./lock.js";
-import { renderCartAgentPrompt } from "./prompt.js";
+import { guardShoppingNavigation } from "./wfm-navigation.js";
+import { addCandidate, searchProducts } from "./wfm-page.js";
 import {
   buildCartReport,
   buildFailedCartReport,
-  completeCartAgentResults,
+  completeCartItemResults,
 } from "./report-builder.js";
 import {
   assertAttachmentReportSafe,
@@ -71,47 +63,34 @@ import {
   assertReportMatchesShoppingList,
   assertReportPreflight,
   loadShoppingList,
-  parseCartAgentResult,
   parseAttachmentReport,
   parseAuthReport,
 } from "./validation.js";
 import type {
   AttachmentReport,
   AuthReport,
-  CartAgentResult,
+  CartItemResult,
   OwnedChromeSession,
   RunPaths,
   ShoppingList,
 } from "./types.js";
 import { writeUsageSummary } from "./usage.js";
 
-interface InvokeCartAgentInput {
-  task: CartAgentTask;
-  priorResults: readonly CartAgentResult[];
-  attemptDir: string;
-  resultPath: string;
-  prompt: string;
-}
-
-type InvokeCartAgent = (
-  input: InvokeCartAgentInput,
-  signal?: AbortSignal,
-) => Promise<CartAgentResult>;
-
 type CommandKind = RunPaths["kind"];
 
 interface CliDependencies {
   rootDir?: string;
   env?: NodeJS.ProcessEnv;
-  invokeCartAgent?: InvokeCartAgent;
   runIngredients?: typeof runIngredientsAgent;
   inspectCart?: (
     session: OwnedChromeSession,
   ) => Promise<CartInspectionResult>;
-  prepareCartAgentPage?: (session: OwnedChromeSession) => Promise<void>;
-  inspectCartAgentPage?: (
-    session: OwnedChromeSession,
-  ) => Promise<CartAgentPageSafety>;
+  runCartItems?: (input: {
+    tasks: ReturnType<typeof cartTasks>;
+    baseline: CartInspectionResult;
+    runDir: string;
+    signal?: AbortSignal;
+  }) => Promise<CartFlowResult>;
   signal?: AbortSignal;
   secureReport?: (path: string) => void;
   launchBrowser?: (input: LaunchChromeInput) => Promise<OwnedChromeSession>;
@@ -122,13 +101,6 @@ interface CliDependencies {
     expectation?: DeliveryContextExpectation,
   ) => Promise<AuthReport | AttachmentReport>;
   releaseLock?: (lock: RunLock) => void;
-}
-
-export interface CartAgentPageSafety {
-  safe: boolean;
-  checkoutVisited: boolean;
-  settingsChanged: boolean;
-  failureReason: string | null;
 }
 
 export interface SignalHandlerOptions {
@@ -145,7 +117,7 @@ const USAGE = `usage: cart build <shopping-list.json> [--model <model>] [--effor
 const WHOLE_FOODS_URL = "https://www.wholefoodsmarket.com/grocery/search";
 const WHOLE_FOODS_CART_URL = "https://www.wholefoodsmarket.com/grocery/cart";
 const EXAMPLE_URL = "https://example.com";
-const CART_AGENT_SCHEMA_PATH = "schemas/cart-agent-result.schema.json";
+const DECISION_SCHEMA_PATH = "schemas/cart-decision.schema.json";
 const INGREDIENTS_AGENT_SCHEMA_PATH = "schemas/ingredients-agent-output.schema.json";
 
 const inspectOwnedCart = async (
@@ -170,61 +142,10 @@ const inspectOwnedCart = async (
   }
 };
 
-const prepareOwnedCartAgentPage = async (
-  session: OwnedChromeSession,
-): Promise<void> => {
-  if (session.remoteDebuggingPort === undefined) {
-    throw new Error("Chrome was not launched with a debugging port");
-  }
-  const browser = await connectToOwnedChrome(session.remoteDebuggingPort);
-  try {
-    const context = browser.contexts()[0];
-    if (!context) throw new Error("Chrome exposed no browser context");
-    const page = context.pages().find((candidate) =>
-      isWholeFoodsPage(candidate.url()),
-    );
-    if (!page) throw new Error("Chrome exposed no Whole Foods browser page");
-    await page.goto(WHOLE_FOODS_URL, { waitUntil: "domcontentloaded" });
-    if (!isWholeFoodsPage(page.url()) || /(?:^|\/)cart(?:\/|$)/i.test(new URL(page.url()).pathname)) {
-      throw new Error(
-        `Could not return the controlled tab to the Whole Foods shopping page: ${page.url()}`,
-      );
-    }
-  } finally {
-    await browser.close().catch(() => undefined);
-  }
-};
-
-const attachOwnedCartNetworkObserver = async (
-  session: OwnedChromeSession,
-): Promise<{ observer: CartNetworkObserver; close: () => Promise<void> } | null> => {
-  if (session.remoteDebuggingPort === undefined) return null;
-  const connected = await connectToOwnedChrome(session.remoteDebuggingPort);
-  const context = connected.contexts()[0];
-  const page = context?.pages().find((candidate) => isWholeFoodsPage(candidate.url()));
-  if (!page) {
-    await connected.close().catch(() => undefined);
-    return null;
-  }
-  const observer = new CartNetworkObserver(page);
-  return {
-    observer,
-    close: async () => {
-      observer.dispose();
-      await connected.close().catch(() => undefined);
-    },
-  };
-};
-
-const snapshotFromInspection = (items: CartInspectionResult["items"]): CartNetworkItem[] =>
-  items.flatMap((item) => item.productId
-    ? [{ asin: item.productId.toUpperCase(), quantity: item.quantity }]
-    : []);
-
 const inspectionFromNetworkSnapshot = (
   snapshot: CartNetworkSnapshot,
   baselineItems: CartInspectionResult["items"],
-  results: readonly CartAgentResult[],
+  results: readonly CartItemResult[],
 ): CartInspectionResult | null => {
   const names = new Map<string, string>();
   for (const item of baselineItems) {
@@ -249,56 +170,6 @@ const inspectionFromNetworkSnapshot = (
     extractionStatus: "complete",
     extractionDiagnostic: null,
   };
-};
-
-export const classifyCartAgentUrl = (value: string): CartAgentPageSafety => {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return {
-      safe: false,
-      checkoutVisited: false,
-      settingsChanged: false,
-      failureReason: `Cart Agent left an invalid browser URL: ${value}`,
-    };
-  }
-  const checkoutVisited = /(?:checkout|\/gp\/buy|\/order)/i.test(url.pathname);
-  const settingsChanged = /(?:account|settings|address|payment)/i.test(url.pathname);
-  const wholeFoods = /(^|\.)wholefoodsmarket\.com$/i.test(url.hostname);
-  const safe = wholeFoods && !checkoutVisited && !settingsChanged;
-  return {
-    safe,
-    checkoutVisited,
-    settingsChanged,
-    failureReason: safe
-      ? null
-      : checkoutVisited
-        ? `Cart Agent crossed the checkout/order boundary: ${value}`
-        : settingsChanged
-          ? `Cart Agent crossed the account/settings boundary: ${value}`
-          : `Cart Agent left the Whole Foods storefront: ${value}`,
-  };
-};
-
-const inspectOwnedCartAgentPage = async (
-  session: OwnedChromeSession,
-): Promise<CartAgentPageSafety> => {
-  if (session.remoteDebuggingPort === undefined) {
-    throw new Error("Chrome was not launched with a debugging port");
-  }
-  const browser = await connectToOwnedChrome(session.remoteDebuggingPort);
-  try {
-    const context = browser.contexts()[0];
-    if (!context) throw new Error("Chrome exposed no browser context");
-    const page = context.pages().find((candidate) =>
-      isWholeFoodsPage(candidate.url()),
-    );
-    if (!page) throw new Error("Chrome exposed no Whole Foods browser page");
-    return classifyCartAgentUrl(page.url());
-  } finally {
-    await browser.close().catch(() => undefined);
-  }
 };
 
 /**
@@ -335,29 +206,29 @@ export const parseCommand = (
   command: CommandKind;
   shoppingListPath?: string;
   recipePaths?: string[];
-  cartAgentModel?: string;
-  cartAgentReasoningEffort?: ReasoningEffort;
+  cartDecisionModel?: string;
+  cartDecisionReasoningEffort?: ReasoningEffort;
 } | null => {
   const command = argv[0];
   if (command === "build" || command === "build-recipes") {
     const paths: string[] = [];
-    let cartAgentModel: string | undefined;
-    let cartAgentReasoningEffort: ReasoningEffort | undefined;
+    let cartDecisionModel: string | undefined;
+    let cartDecisionReasoningEffort: ReasoningEffort | undefined;
     for (let index = 1; index < argv.length; index += 1) {
       const argument = argv[index]!;
       if (argument === "--model") {
         const value = argv[index + 1];
-        if (!value || value.startsWith("--") || cartAgentModel) return null;
-        cartAgentModel = value;
+        if (!value || value.startsWith("--") || cartDecisionModel) return null;
+        cartDecisionModel = value;
         index += 1;
       } else if (argument === "--effort") {
         const value = argv[index + 1];
         if (
           !value ||
           !REASONING_EFFORTS.includes(value as ReasoningEffort) ||
-          cartAgentReasoningEffort
+          cartDecisionReasoningEffort
         ) return null;
-        cartAgentReasoningEffort = value as ReasoningEffort;
+        cartDecisionReasoningEffort = value as ReasoningEffort;
         index += 1;
       } else if (argument.startsWith("--")) {
         return null;
@@ -366,8 +237,8 @@ export const parseCommand = (
       }
     }
     const settings = {
-      ...(cartAgentModel ? { cartAgentModel } : {}),
-      ...(cartAgentReasoningEffort ? { cartAgentReasoningEffort } : {}),
+      ...(cartDecisionModel ? { cartDecisionModel } : {}),
+      ...(cartDecisionReasoningEffort ? { cartDecisionReasoningEffort } : {}),
     };
     if (command === "build" && paths.length === 1) {
       return { command, shoppingListPath: paths[0]!, ...settings };
@@ -398,15 +269,16 @@ export async function runCli(
   argv: string[],
   dependencies: CliDependencies = {},
 ): Promise<number> {
+  const runStartedAt = new Date();
   const parsed = parseCommand(argv);
   if (!parsed) {
     console.error(USAGE);
     return 2;
   }
   const command = parsed.command;
-  const cartAgentModel = parsed.cartAgentModel ?? CART_AGENT_MODEL;
-  const cartAgentReasoningEffort =
-    parsed.cartAgentReasoningEffort ?? CART_AGENT_REASONING_EFFORT;
+  const cartDecisionModel = parsed.cartDecisionModel ?? DECISION_MODEL;
+  const cartDecisionReasoningEffort =
+    parsed.cartDecisionReasoningEffort ?? DECISION_REASONING_EFFORT;
 
   const rootDir = resolve(dependencies.rootDir ?? process.cwd());
   const secure =
@@ -417,7 +289,11 @@ export async function runCli(
 
   let lock: RunLock | undefined;
   let browser: OwnedChromeSession | undefined;
-  let cartNetworkSession: { observer: CartNetworkObserver; close: () => Promise<void> } | null = null;
+  let browserConnection: Browser | undefined;
+  let shoppingPage: Page | undefined;
+  let cartNetworkObserver: CartNetworkObserver | undefined;
+  let removeNavigationGuard: (() => Promise<void>) | undefined;
+  let blockedNavigation: string | null = null;
   let paths: RunPaths | undefined;
   let exitCode = 2;
   let lockAcquired = false;
@@ -441,10 +317,9 @@ export async function runCli(
     if (lockAcquired && lock) {
       const heldLock = lock;
       try {
-        if (cartNetworkSession) {
-          await cartNetworkSession.close();
-          cartNetworkSession = null;
-        }
+        cartNetworkObserver?.dispose();
+        if (removeNavigationGuard) await removeNavigationGuard().catch(() => undefined);
+        if (browserConnection) await browserConnection.close().catch(() => undefined);
         if (invocationAttempted && paths) {
           try {
             secure(paths.reportPath);
@@ -460,10 +335,25 @@ export async function runCli(
           (command === "build" || command === "build-recipes")
         ) {
           try {
+            const timingPath = join(paths.runDir, "timings.json");
+            const itemTiming = (() => {
+              try {
+                return JSON.parse(readFileSync(timingPath, "utf8")) as Record<string, unknown>;
+              } catch {
+                return { items: [], totalItemMs: 0 };
+              }
+            })();
+            const completedAt = new Date();
+            writeFileSync(timingPath, `${JSON.stringify({
+              ...itemTiming,
+              startedAt: runStartedAt.toISOString(),
+              completedAt: completedAt.toISOString(),
+              wallMs: completedAt.getTime() - runStartedAt.getTime(),
+            }, null, 2)}\n`, { mode: 0o600 });
             writeUsageSummary(paths.runDir);
           } catch (error) {
             console.warn(
-              `Could not write usage.json: ${error instanceof Error ? error.message : String(error)}`,
+              `Could not write timing or usage summary: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
         }
@@ -504,9 +394,6 @@ export async function runCli(
     const config = loadConfig(dependencies.env ?? process.env, rootDir);
     assertExecutable(config.chromeExecutable, "Chrome executable");
     const isCartBuild = parsed.command === "build" || parsed.command === "build-recipes";
-    if (isCartBuild) {
-      assertExecutable(config.playwrightMcpBin, "Playwright MCP");
-    }
 
     let request: ShoppingList | undefined;
     let recipeDocuments: RecipeDocument[] | undefined;
@@ -541,10 +428,10 @@ export async function runCli(
         writeShoppingListSnapshot(requestSource!, paths.shoppingListPath);
       }
       writeRunMetadata(paths, requestSource!, requestSha256, {
-        model: cartAgentModel,
-        reasoningEffort: cartAgentReasoningEffort,
-        cartAgentModel,
-        cartAgentReasoningEffort,
+        model: cartDecisionModel,
+        reasoningEffort: cartDecisionReasoningEffort,
+        cartDecisionModel: cartDecisionModel,
+        cartDecisionReasoningEffort: cartDecisionReasoningEffort,
         ...(parsed.command === "build-recipes"
           ? {
               ingredientsAgentModel: INGREDIENTS_AGENT_MODEL,
@@ -779,223 +666,110 @@ export async function runCli(
       return await finish();
     }
 
-    if (!dependencies.inspectCart) {
-      try {
-        cartNetworkSession = await attachOwnedCartNetworkObserver(browser);
-      } catch (error) {
-        console.warn(
-          `Cart network observer unavailable; cart-page verification will be used: ${error instanceof Error ? error.message : String(error)}`,
+    const tasks = cartTasks(requestValue);
+    let latestNetworkSnapshot: CartNetworkSnapshot | null = null;
+    let networkDiagnostic: string | null = null;
+    let flow: CartFlowResult;
+    try {
+      if (dependencies.runCartItems) {
+        flow = await dependencies.runCartItems({ tasks, baseline, runDir: paths.runDir, ...(signal ? { signal } : {}) });
+      } else {
+        if (browser?.remoteDebuggingPort === undefined) throw new Error("Owned Chrome did not expose a remote debugging port");
+        browserConnection = await connectToOwnedChrome(browser.remoteDebuggingPort);
+        const context = browserConnection.contexts()[0];
+        if (!context) throw new Error("Chrome exposed no browser context");
+        shoppingPage = context.pages().find((page) => isWholeFoodsPage(page.url())) ?? context.pages()[0];
+        if (!shoppingPage) throw new Error("Chrome exposed no browser page");
+        removeNavigationGuard = await guardShoppingNavigation(context, (url) => { blockedNavigation = url; });
+        cartNetworkObserver = new CartNetworkObserver(shoppingPage);
+        const decisionAttempts = new Map<string, number>();
+        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, cart: CartInspectionResult["items"]) => {
+          const itemDir = join(paths!.runDir, "cart-decision", task.ingredient.id);
+          mkdirSync(itemDir, { recursive: true, mode: 0o700 });
+          const attempt = (decisionAttempts.get(task.ingredient.id) ?? 0) + 1;
+          decisionAttempts.set(task.ingredient.id, attempt);
+          const outputPath = join(itemDir, `decision-${attempt}.json`);
+          const invocation = buildDecisionInvocation({ rootDir, outputPath, schemaPath: join(rootDir, DECISION_SCHEMA_PATH), model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort });
+          const result = await runCodex({ executable: config.codexBin, args: invocation.args, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, context: task.ingredient.context ?? null }, recipeContext: task.recipeContext, candidates, currentCart: cart }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
+          if (result.exitCode !== 0 || result.timedOut) throw new Error("Cart decision Codex invocation failed");
+          return parseAndValidateDecision(readFileSync(outputPath, "utf8"), candidates, cart);
+        };
+        flow = await runCartFlow({
+          tasks,
+          baseline: baseline.items,
+          search: async (query) => {
+            if (blockedNavigation) throw new Error(`Blocked shopping navigation: ${blockedNavigation}`);
+            await shoppingPage!.goto(WHOLE_FOODS_URL);
+            return searchProducts(shoppingPage!, query);
+          },
+          decide,
+          add: async (candidate, quantity, option, before) => {
+            await cartNetworkObserver!.beginMutation(before);
+            let clickError: unknown;
+            try {
+              await addCandidate(shoppingPage!, candidate, quantity, option ?? undefined);
+            } catch (error) {
+              clickError = error;
+            }
+            const outcome = await cartNetworkObserver!.waitForMutation({
+              asin: candidate.id,
+              expectedQuantity: quantity === 1 ? "positive" : quantity,
+            });
+            if (blockedNavigation) throw new Error(`Blocked shopping navigation: ${blockedNavigation}`);
+            if (outcome.status === "confirmed") return outcome.snapshot;
+            writeFileSync(
+              join(paths!.runDir, "cart-network-diagnostic.json"),
+              `${JSON.stringify(outcome, null, 2)}\n`,
+              { mode: 0o600 },
+            );
+            if (clickError) {
+              throw new Error(`${clickError instanceof Error ? clickError.message : String(clickError)}; ${outcome.diagnostic}`, { cause: clickError });
+            }
+            throw new Error(outcome.diagnostic);
+          },
+          ...(signal ? { signal } : {}),
+          onProgress: async (current) => {
+            writeFileSync(join(paths!.runDir, "progress.json"), `${JSON.stringify(current)}\n`, { mode: 0o600 });
+          },
+        });
+      }
+    } catch (error) {
+      flow = { total: tasks.length, completed: 0, results: [], timings: [], stopped: true, stopReason: error instanceof Error ? error.message : String(error), latestSnapshot: null, failure: null };
+      leaveBrowserOpen = true;
+      writeFileSync(join(paths.runDir, "cart-decision-diagnostic.json"), `${JSON.stringify({ stage: "setup", reason: flow.stopReason, blockedNavigation })}\n`, { mode: 0o600 });
+    }
+    if (blockedNavigation) {
+      flow = { ...flow, stopped: true, stopReason: `Blocked shopping navigation: ${blockedNavigation}` };
+      leaveBrowserOpen = true;
+      if (!flow.failure) {
+        writeFileSync(
+          join(paths.runDir, "cart-decision-diagnostic.json"),
+          `${JSON.stringify({ stage: "navigation", reason: flow.stopReason, blockedNavigation, pageUrl: shoppingPage?.url() ?? null })}\n`,
+          { mode: 0o600 },
         );
       }
     }
-    const prepareCartAgentPage =
-      dependencies.prepareCartAgentPage ??
-      (dependencies.inspectCart ? async () => undefined : prepareOwnedCartAgentPage);
-    try {
-      await prepareCartAgentPage(browser);
-      // The observer is attached before search-page navigation, so this drain
-      // records cartcache responses for diagnosis without assuming they provide
-      // a complete baseline. Only successful cart POSTs are authoritative.
-      await cartNetworkSession?.observer.drain();
-    } catch (error) {
-      leaveBrowserOpen = true;
-      const reason =
-        `Could not prepare the Whole Foods shopping page for the Cart Agent: ${error instanceof Error ? error.message : String(error)}`;
-      const report = buildFailedCartReport({
-        request: requestValue,
-        requestSha256,
-        preflight,
-        failureReason: reason,
-        baselineItems: baseline.items,
-      });
-      writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
-        mode: 0o600,
-      });
-      console.error(`Cart Agent page preparation failed; inspect ${paths.runDir}`);
-      console.error(
-        "Dedicated Chrome left open so you can inspect the failed run. Close it before retrying.",
-      );
-      exitCode = 1;
-      return await finish();
-    }
-
-    const tasks = flattenCartAgentTasks(requestValue);
-    const invokeCartAgent: InvokeCartAgent =
-      dependencies.invokeCartAgent ??
-      (async (input, runSignal) => {
-        const remoteDebuggingPort = browser?.remoteDebuggingPort;
-        if (remoteDebuggingPort === undefined) {
-          throw new Error(
-            "Owned Chrome did not expose a remote debugging port for the Cart Agent",
-          );
-        }
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          const suffix = attempt === 1 ? "" : "-retry";
-          const browserOutputDir = join(input.attemptDir, `browser${suffix}`);
-          const resultPath =
-            attempt === 1
-              ? input.resultPath
-              : join(input.attemptDir, `result${suffix}.json`);
-          const eventsPath = join(input.attemptDir, `codex-events${suffix}.jsonl`);
-          mkdirSync(browserOutputDir, { recursive: true, mode: 0o700 });
-          const invocation = buildCodexInvocation({
-            rootDir,
-            browserOutputDir,
-            reportPath: resultPath,
-            schemaPath: join(rootDir, CART_AGENT_SCHEMA_PATH),
-            playwrightMcpBin: config.playwrightMcpBin,
-            remoteDebuggingPort,
-            model: cartAgentModel,
-            reasoningEffort: cartAgentReasoningEffort,
-          });
-          const result = await runCodex({
-            executable: config.codexBin,
-            args: invocation.args,
-            prompt: input.prompt,
-            eventsPath,
-            stderrPath: join(input.attemptDir, `codex-stderr${suffix}.log`),
-            timeoutMs: config.maxRunMs,
-            ...(runSignal ? { signal: runSignal } : {}),
-          });
-          if (result.timedOut || result.exitCode !== 0) {
-            throw new Error(
-              `Cart Agent failed for ${input.task.ingredient.id}`,
-            );
-          }
-          const parsedResult = parseCartAgentResult(
-            readFileSync(resultPath, "utf8"),
-          );
-          if (parsedResult.ingredientId !== input.task.ingredient.id) {
-            throw new Error(
-              `Cart Agent returned ${parsedResult.ingredientId} for ${input.task.ingredient.id}`,
-            );
-          }
-          const usedPlaywright = codexEventsContainPlaywrightCall(eventsPath);
-          if (parsedResult.status === "failed" && !usedPlaywright) {
-            if (attempt === 1) continue;
-            throw new Error(
-              `Cart Agent received no usable Playwright tools for ${input.task.ingredient.id} after 2 attempts`,
-            );
-          }
-          return parsedResult;
-        }
-        throw new Error(
-          `Cart Agent retry loop exhausted for ${input.task.ingredient.id}`,
-        );
-      });
-
-    let observedCheckout = false;
-    let observedSettingsChange = false;
-    let latestNetworkSnapshot: CartNetworkSnapshot | null = null;
-    let networkReconciliationsComplete = true;
-    let networkDiagnostic: string | null = null;
-    const baselineNetworkItems = baseline.items.length === 0
-      ? []
-      : baseline.items.every((item) => Boolean(item.productId))
-        ? snapshotFromInspection(baseline.items)
+    writeFileSync(join(paths.runDir, "progress.json"), `${JSON.stringify(flow)}\n`, { mode: 0o600 });
+    writeFileSync(join(paths.runDir, "timings.json"), `${JSON.stringify({ items: flow.timings, totalItemMs: flow.timings.reduce((sum, item) => sum + item.totalMs, 0) }, null, 2)}\n`, { mode: 0o600 });
+    latestNetworkSnapshot = flow.latestSnapshot;
+    if (flow.failure) {
+      if (flow.failure.mayHaveCommitted) leaveBrowserOpen = true;
+      const pageUrl = shoppingPage?.url() ?? null;
+      const pageText = shoppingPage
+        ? await shoppingPage.locator("body").innerText().catch(() => null)
         : null;
-    let reconciledResults: CartAgentResult[] = [];
-    const progress = await runCartAgentTasks({
-      tasks,
-      session: browser,
-      invokeAgent: async ({ task, priorResults, signal: agentSignal }) => {
-        const attemptDir = join(
-          paths!.runDir,
-          "cart-agent",
-          task.ingredient.id,
-        );
-        mkdirSync(attemptDir, { recursive: true, mode: 0o700 });
-        const resultPath = join(attemptDir, "result.json");
-        const prompt = renderCartAgentPrompt({
-          task,
-          cartContext: {
-            baselineItems: baseline.items,
-            priorResults,
-          },
-        });
-        let result: CartAgentResult | undefined;
-        let invocationError: unknown;
-        try {
-          result = await invokeCartAgent(
-            {
-              task,
-              priorResults,
-              attemptDir,
-              resultPath,
-              prompt,
-            },
-            agentSignal,
-          );
-        } catch (error) {
-          invocationError = error;
-        }
-        const inspectAgentPage =
-          dependencies.inspectCartAgentPage ??
-          (dependencies.inspectCart ? async () => ({
-            safe: true,
-            checkoutVisited: false,
-            settingsChanged: false,
-            failureReason: null,
-          }) : inspectOwnedCartAgentPage);
-        const pageSafety = await inspectAgentPage(browser!);
-        observedCheckout = observedCheckout || pageSafety.checkoutVisited;
-        observedSettingsChange = observedSettingsChange || pageSafety.settingsChanged;
-        const responseRecords = cartNetworkSession
-          ? result?.status === "added"
-            ? await cartNetworkSession.observer.waitForFullCartPost()
-            : await cartNetworkSession.observer.drain()
-          : [];
-        const responseSnapshot = getSuccessfulFullCartPost(responseRecords);
-        if (invocationError !== undefined || !pageSafety.safe || !result) {
-          if (cartNetworkSession) {
-            networkReconciliationsComplete = false;
-            networkDiagnostic = "A Cart Agent invocation did not produce a safe, valid result; its cart effects cannot be reconciled.";
-            if (responseSnapshot) latestNetworkSnapshot = responseSnapshot;
-          }
-        }
-        if (!pageSafety.safe) {
-          throw new Error(pageSafety.failureReason ?? "Cart Agent left an unsafe browser state");
-        }
-        if (invocationError !== undefined) throw invocationError;
-        if (!result) throw new Error("Cart Agent returned no result");
-        reconciledResults = [...priorResults, result];
-        if (cartNetworkSession) {
-          if (responseSnapshot) {
-            const before = latestNetworkSnapshot?.items ?? baselineNetworkItems;
-            if (before === null) {
-              networkReconciliationsComplete = false;
-              networkDiagnostic = "Baseline cart items did not all include product IDs, so the network cart delta cannot be reconciled.";
-            } else {
-              const reconciliation = reconcileCartAgentResult(before, responseSnapshot, result);
-              if (!reconciliation.matched) {
-                networkReconciliationsComplete = false;
-                networkDiagnostic = reconciliation.diagnostic;
-              }
-            }
-            latestNetworkSnapshot = responseSnapshot;
-          } else if (result.status === "added") {
-            networkReconciliationsComplete = false;
-            networkDiagnostic = "No successful full-cart POST response was observed for an added result.";
-          } else if (result.status === "failed") {
-            networkReconciliationsComplete = false;
-            networkDiagnostic = "A failed Cart Agent result may have partial cart effects that were not established by a full-cart response.";
-          }
-        }
-        return result;
-      },
-      ...(signal ? { signal } : {}),
-      onProgress: async (current) => {
-        writeFileSync(
-          join(paths!.runDir, "progress.json"),
-          `${JSON.stringify(current)}\n`,
-          { mode: 0o600 },
-        );
-      },
-    });
-
+      writeFileSync(
+        join(paths.runDir, "cart-decision-diagnostic.json"),
+        `${JSON.stringify({ ...flow.failure, latestSnapshot: flow.latestSnapshot, pageUrl, pageText })}\n`,
+        { mode: 0o600 },
+      );
+    }
+    const reconciledResults = [...flow.results];
+    const progress = { stopped: flow.stopped, stopReason: flow.stopReason, results: flow.results.map((result, index) => ({ task: tasks[index]!, result })) };
+    if (blockedNavigation) networkDiagnostic = `Blocked navigation outside Whole Foods: ${blockedNavigation}`;
     let final: CartInspectionResult;
     let finalInspectionFailure: string | null = null;
-    const networkFinal = latestNetworkSnapshot && networkReconciliationsComplete
+    const networkFinal = latestNetworkSnapshot
       ? inspectionFromNetworkSnapshot(latestNetworkSnapshot, baseline.items, reconciledResults)
       : null;
     if (networkFinal) {
@@ -1021,9 +795,9 @@ export async function runCli(
     }
 
     const resultReason = progress.stopReason
-      ? `The Cart Agent loop stopped before this item: ${progress.stopReason}`
-      : "The Cart Agent loop did not complete";
-    const results = completeCartAgentResults(
+      ? `The cart run stopped before this item: ${progress.stopReason}`
+      : "The cart run did not complete";
+    const results = completeCartItemResults(
       requestValue,
       progress.results.map(({ result }) => result),
       resultReason,
@@ -1031,11 +805,7 @@ export async function runCli(
     const report = buildCartReport({
       request: requestValue,
       requestSha256,
-      preflight: {
-        ...preflight,
-        checkoutVisited: preflight.checkoutVisited || observedCheckout,
-        settingsChanged: preflight.settingsChanged || observedSettingsChange,
-      },
+      preflight,
       baseline,
       final,
       results,

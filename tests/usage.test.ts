@@ -19,13 +19,13 @@ const writeEvents = (
 };
 
 describe("usage rollup", () => {
-  it("prices Cart Agent runs that override the model to Luna", () => {
+  it("prices cart-decision runs that use Luna", () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-luna-"));
     writeFileSync(
       join(runDir, "metadata.json"),
-      JSON.stringify({ cartAgentModel: "gpt-5.6-luna" }),
+      JSON.stringify({ cartDecisionModel: "gpt-5.6-luna" }),
     );
-    writeEvents(join(runDir, "cart-agent", "ginger", "codex-events.jsonl"), {
+    writeEvents(join(runDir, "cart-decision", "ginger", "codex-events.jsonl"), {
       input_tokens: 1_000_000,
       cached_input_tokens: 900_000,
       output_tokens: 1_000,
@@ -45,13 +45,13 @@ describe("usage rollup", () => {
     });
   });
 
-  it("includes Ingredients Agent, Cart Agent, and retry usage", () => {
+  it("includes Ingredients Agent, cart-decision, and retry usage", () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-"));
     writeFileSync(
       join(runDir, "metadata.json"),
       JSON.stringify({
         ingredientsAgentModel: "gpt-5.6-terra",
-        cartAgentModel: "gpt-5.6-terra",
+        cartDecisionModel: "gpt-5.6-luna",
       }),
     );
     writeEvents(join(runDir, "ingredients-agent", "codex-events.jsonl"), {
@@ -61,14 +61,14 @@ describe("usage rollup", () => {
       output_tokens: 100,
       reasoning_output_tokens: 20,
     });
-    writeEvents(join(runDir, "cart-agent", "ginger", "codex-events.jsonl"), {
+    writeEvents(join(runDir, "cart-decision", "ginger", "codex-events.jsonl"), {
       input_tokens: 2_000,
       cached_input_tokens: 1_500,
       output_tokens: 200,
       reasoning_output_tokens: 40,
     });
     writeEvents(
-      join(runDir, "cart-agent", "ginger", "codex-events-retry.jsonl"),
+      join(runDir, "cart-decision", "ginger", "codex-events-retry.jsonl"),
       {
         input_tokens: 3_000,
         cached_input_tokens: 2_500,
@@ -84,8 +84,8 @@ describe("usage rollup", () => {
       item_id,
       attempt,
     }))).toEqual([
-      { component: "cart-agent", item_id: "ginger", attempt: "initial" },
-      { component: "cart-agent", item_id: "ginger", attempt: "retry" },
+      { component: "cart-decision", item_id: "ginger", attempt: "initial" },
+      { component: "cart-decision", item_id: "ginger", attempt: "retry" },
       { component: "ingredients-agent", item_id: null, attempt: "initial" },
     ]);
     expect(summary.totals).toMatchObject({
@@ -102,18 +102,18 @@ describe("usage rollup", () => {
       unpriced_invocation_count: 0,
       price_coverage: "all",
       estimated_list_price_usd: {
-        uncached_input_usd: 0.0036,
-        cached_input_usd: 0.00084,
+        uncached_input_usd: 0.0018,
+        cached_input_usd: 0.00012,
         cache_write_surcharge_usd: 0.000025,
-        output_usd: 0.0072,
-        total_usd: 0.011665,
+        output_usd: 0.0018,
+        total_usd: 0.003745,
       },
     });
   });
 
   it("records an attempted stream with missing usage and tolerates malformed lines", () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-missing-"));
-    const path = join(runDir, "cart-agent", "broccoli", "codex-events.jsonl");
+    const path = join(runDir, "cart-decision", "broccoli", "codex-events.jsonl");
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, "{not-json}\n{\"type\":\"turn.started\"}\n");
 

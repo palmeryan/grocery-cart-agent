@@ -4,7 +4,7 @@ import type {
   CartReport,
   CartSelection,
   ShoppingList,
-  CartAgentResult,
+  CartItemResult,
 } from "./types.js";
 import {
   computeCartDelta,
@@ -18,17 +18,17 @@ export interface BuildCartReportInput {
   preflight: AuthReport;
   baseline: CartInspectionResult;
   final: CartInspectionResult;
-  results: readonly CartAgentResult[];
+  results: readonly CartItemResult[];
   stopped?: boolean;
   stopReason?: string | null;
   additionalVerificationNotes?: readonly string[];
 }
 
-export function completeCartAgentResults(
+export function completeCartItemResults(
   request: ShoppingList,
-  results: readonly CartAgentResult[],
+  results: readonly CartItemResult[],
   reason: string,
-): CartAgentResult[] {
+): CartItemResult[] {
   const byId = new Map(results.map((result) => [result.ingredientId, result]));
   return request.recipes.flatMap((recipe) =>
     recipe.ingredients.map((ingredient) =>
@@ -41,7 +41,7 @@ export function completeCartAgentResults(
         packageSize: null,
         quantity: 0,
         price: null,
-        rationale: "The Cart Agent loop did not reach this shopping-list item.",
+        rationale: "The cart run did not reach this shopping-list item.",
         confidence: "low",
         failureReason: reason,
       },
@@ -50,7 +50,7 @@ export function completeCartAgentResults(
 }
 
 const emptySelection = (
-  result: CartAgentResult,
+  result: CartItemResult,
   rationale: string,
 ): CartSelection => ({
   ingredientId: result.ingredientId,
@@ -65,7 +65,7 @@ const emptySelection = (
   confidence: result.confidence,
 });
 
-const asSelection = (result: CartAgentResult): CartSelection => {
+const asSelection = (result: CartItemResult): CartSelection => {
   if (result.status === "added" || result.status === "already_present") {
     return {
       ingredientId: result.ingredientId,
@@ -95,7 +95,7 @@ const normalizeName = (value: string): string =>
     .toLocaleLowerCase();
 
 /**
- * Cart Agent quantity is a count of purchase units. Whole Foods cart controls
+ * Cart item quantity is a count of purchase units. Whole Foods cart controls
  * normally expose that same count, but weighted produce can instead expose the
  * selected weight (for example, one 0.25 lb ginger purchase appears as 0.25).
  * A positive cart value therefore proves a single reported purchase unit; only
@@ -103,12 +103,12 @@ const normalizeName = (value: string): string =>
  */
 const quantityMatchesResult = (
   item: CartItemSnapshot,
-  result: CartAgentResult,
+  result: CartItemResult,
 ): boolean => result.quantity === 1 ? item.quantity > 0 : item.quantity >= result.quantity;
 
 const itemMatchesResult = (
   item: CartItemSnapshot,
-  result: CartAgentResult,
+  result: CartItemResult,
 ): boolean => {
   if (result.productName === null || result.quantity < 1) return false;
   if (item.productId && result.productId) {
@@ -130,7 +130,7 @@ const itemMatchesResult = (
 
 const cartItemsContain = (
   items: readonly CartItemSnapshot[],
-  result: CartAgentResult,
+  result: CartItemResult,
 ): boolean => items.some((item) => itemMatchesResult(item, result));
 
 interface VerificationNote {
@@ -139,7 +139,7 @@ interface VerificationNote {
 }
 
 const verifyResults = (
-  results: readonly CartAgentResult[],
+  results: readonly CartItemResult[],
   baseline: CartInspectionResult,
   final: CartInspectionResult,
 ): VerificationNote[] => {
@@ -160,7 +160,7 @@ const verifyResults = (
       notes.push({
         ingredientId: result.ingredientId,
         note:
-          `Final cart verification did not match the Cart Agent result for ${result.ingredientId}: ` +
+          `Final cart verification did not match the cart item result for ${result.ingredientId}: ` +
           `expected ${result.quantity} of ${result.productName ?? "an identified product"}.`,
       });
     }

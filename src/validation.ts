@@ -10,7 +10,6 @@ import type {
   AuthReport,
   CartReport,
   ShoppingList,
-  CartAgentResult,
   RecipeCompilation,
 } from "./types.js";
 import { assertRecipeCompilationIntegrity } from "./shopping-list-compiler.js";
@@ -29,9 +28,6 @@ const authReportValidator = compile("../schemas/auth-report.schema.json");
 const attachmentReportValidator = compile(
   "../schemas/attachment-report.schema.json",
 );
-const cartAgentResultValidator = compile(
-  "../schemas/cart-agent-result.schema.json",
-);
 const recipeCompilationValidator = compile("../schemas/recipe-compilation.schema.json");
 const ingredientsAgentOutputValidator = compile("../schemas/ingredients-agent-output.schema.json");
 
@@ -47,7 +43,6 @@ export class ValidationFailure extends Error {
       | "report"
       | "auth report"
       | "attachment report"
-      | "cart agent result"
       | "recipe compilation"
       | "Ingredients Agent output",
     errors: ErrorObject[] | null | undefined,
@@ -103,14 +98,6 @@ export function parseReport(text: string): CartReport {
     throw new ValidationFailure("report", reportValidator.errors);
   }
   return value as CartReport;
-}
-
-export function parseCartAgentResult(text: string): CartAgentResult {
-  const value: unknown = JSON.parse(text);
-  if (!cartAgentResultValidator(value)) {
-    throw new ValidationFailure("cart agent result", cartAgentResultValidator.errors);
-  }
-  return value as CartAgentResult;
 }
 
 export function parseRecipeCompilation(text: string): RecipeCompilation {

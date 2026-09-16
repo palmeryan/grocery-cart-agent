@@ -30,7 +30,7 @@ interface CostEstimate {
 }
 
 export interface UsageInvocation extends TokenUsage {
-  component: "ingredients-agent" | "cart-agent" | "legacy-whole-run";
+  component: "ingredients-agent" | "cart-decision" | "legacy-whole-run";
   item_id: string | null;
   attempt: string;
   model: string;
@@ -199,12 +199,12 @@ const invocationIdentity = (
       event_path: relativePath,
     };
   }
-  if (parts[0] === "cart-agent") {
+  if (parts[0] === "cart-decision") {
     return {
-      component: "cart-agent",
+      component: "cart-decision",
       item_id: parts[1] ?? null,
       attempt,
-      model: stringValue(metadata.cartAgentModel, "gpt-5.6-terra"),
+      model: stringValue(metadata.cartDecisionModel, "gpt-5.6-terra"),
       event_path: relativePath,
     };
   }
@@ -212,7 +212,7 @@ const invocationIdentity = (
     component: "legacy-whole-run",
     item_id: null,
     attempt,
-    model: stringValue(metadata.model, "gpt-5.6-terra"),
+    model: stringValue(metadata.model, "gpt-5.6-luna"),
     event_path: relativePath,
   };
 };

@@ -54,7 +54,7 @@ the same owned Chrome profile and localhost CDP endpoint.
 - Treat authentication and delivery context as readiness checks. The safety
   checks are the checkout and account/settings boundaries.
 
-### Supervised Cart Agent smoke
+### Supervised harness smoke
 
 - Put a small valid Shopping List at the gitignored path
   `runs/three-item-smoke.json`.
@@ -68,14 +68,17 @@ npm run cart-list -- runs/three-item-smoke.json
 - Stop immediately on checkout, payment, order, or account-setting pages. If
   the delivery context changes or cannot be established, stop the build and
   return a failed report.
-- Confirm the run created one Cart Agent result per requested ingredient. The
-  browser session should remain the same while each Cart Agent context is fresh.
+- Confirm the run created one confirmed harness decision per requested ingredient.
+  The browser session remains the same while decisions stay browser-tool-free.
 - Confirm the final structured cart check records product IDs, names, and
   quantities and that the current cart delta matches. `runStatus` describes
   execution; `verificationStatus` independently reports `confirmed`,
   `inconclusive`, or `not_run`. An inconclusive final read is recorded under
   `verificationNotes` and leaves Chrome open, but does not turn completed cart
   mutations into an execution failure.
+- Keep `timings.json` and `usage.json` from the run. Compare total wall time,
+  per-item search/decision/confirmation time, model calls, tokens, and estimated
+  list-price equivalent with an earlier agent-driven run.
 
 ### Full recipe-to-cart smoke
 
@@ -87,8 +90,8 @@ npm run cart-recipes -- recipe-one.md recipe-two.md
 ```
 
 - Confirm the run saves `shopping-list.json`,
-  `recipe-compilation.json`, and `ingredients-agent/output.json` before the Cart
-  Agent results.
+  `recipe-compilation.json`, and `ingredients-agent/output.json` before cart
+  decisions.
 
 ### Larger fixtures
 

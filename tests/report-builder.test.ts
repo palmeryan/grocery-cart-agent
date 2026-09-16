@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCartReport,
-  completeCartAgentResults,
+  completeCartItemResults,
 } from "../src/report-builder.js";
 import type {
   AuthReport,
   ShoppingList,
-  CartAgentResult,
+  CartItemResult,
 } from "../src/types.js";
 
 const request: ShoppingList = {
@@ -29,7 +29,7 @@ const preflight: AuthReport = {
   failureReason: null,
 };
 
-const item = (status: CartAgentResult["status"] = "added"): CartAgentResult => ({
+const item = (status: CartItemResult["status"] = "added"): CartItemResult => ({
   ingredientId: "apples",
   requested: "2 apples",
   status,
@@ -229,7 +229,7 @@ describe("report builder", () => {
   });
 
   it("fills unvisited ingredients with explicit failed results", () => {
-    const results = completeCartAgentResults(request, [], "run stopped");
+    const results = completeCartItemResults(request, [], "run stopped");
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({
       ingredientId: "apples",

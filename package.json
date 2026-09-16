@@ -23,7 +23,6 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@playwright/mcp": "0.0.80",
     "@types/node": "22.20.2",
     "eslint": "10.10.0",
     "tsx": "4.23.13",
