@@ -3,20 +3,29 @@ export interface GroceryIngredient {
   request: string;
   preferences?: string[];
   context?: string;
+  purchaseRequirement?: {
+    total: ShoppingQuantity;
+    optional: boolean;
+    alternatives: RecipeIngredientAlternative[];
+    sources: string[];
+  };
 }
 
 export interface GroceryRecipe {
   id: string;
   name: string;
-  servings: number;
+  servings?: number;
   context: string;
   ingredients: GroceryIngredient[];
 }
 
 /** Public input shared by the full recipe path and direct cart path. */
-export interface ShoppingList {
-  recipes: GroceryRecipe[];
-}
+export type ShoppingList = {
+  sourceRecipes?: { sourceName: string; text: string }[];
+} & (
+  | { ingredients: GroceryIngredient[]; recipes?: never }
+  | { recipes: GroceryRecipe[]; ingredients?: never }
+);
 
 
 export interface RecipeIngredientQuantity {
@@ -26,11 +35,13 @@ export interface RecipeIngredientQuantity {
   approximate: boolean;
 }
 
+export type ShoppingQuantity = Omit<RecipeIngredientQuantity, "quantityMax">;
+
 /** Source-facing and additive representations of one recipe amount. */
 export interface RecipeIngredientAmount {
   raw: string;
   sourceQuantity: RecipeIngredientQuantity | null;
-  additiveQuantity: RecipeIngredientQuantity | null;
+  additiveQuantity: ShoppingQuantity;
 }
 
 export interface RecipeIngredientAlternative {
@@ -54,10 +65,8 @@ export interface RecipeIngredientLine {
   /** Only product-choice or substitution context needed by the cart agent. */
   context: string | null;
   optional: boolean;
-  pantryStatus: PantryStatus;
   alternatives: RecipeIngredientAlternative[];
   unresolved: RecipeIngredientUnresolved[];
-  disposition: PantryDisposition;
   purchaseIntentId: string;
 }
 
@@ -66,16 +75,12 @@ export interface CompiledRecipe {
   ingredients: RecipeIngredientLine[];
 }
 
-export type PantryStatus = "buy" | "assume_pantry" | "uncertain";
-export type PantryDisposition = "buy" | "assume_pantry" | "omit_optional";
-
 export interface PurchaseIntentSource {
   sourceName: string;
   sourceText: string;
   sourceOccurrence: number;
   componentIndex: number;
   context: string | null;
-  disposition: PantryDisposition;
 }
 
 export type PurchaseIntentSourceRef = Pick<
@@ -87,14 +92,12 @@ export interface PurchaseIntent {
   id: string;
   primary: {
     name: string;
-    guidance: string;
   };
   alternatives: RecipeIngredientAlternative[];
   sourceLines: PurchaseIntentSource[];
   sourceAmounts: RecipeIngredientAmount[];
-  additiveAmount: RecipeIngredientQuantity | null;
+  additiveAmount: ShoppingQuantity;
   optional: boolean;
-  disposition: PantryDisposition;
 }
 
 export type DecisionPriority = "high" | "medium" | "low";
@@ -103,9 +106,6 @@ export interface CompilationDecision {
   priority: DecisionPriority;
   code:
     | "consolidated"
-    | "incompatible_amounts"
-    | "pantry_assumption"
-    | "optional_omitted"
     | "unresolved_interpretation";
   message: string;
   sources: PurchaseIntentSourceRef[];
@@ -114,7 +114,7 @@ export interface CompilationDecision {
 
 /** Internal source-preserving result used to derive the public ShoppingList. */
 export interface RecipeCompilation {
-  contractVersion: 3;
+  contractVersion: 6;
   recipes: CompiledRecipe[];
   purchaseIntents: PurchaseIntent[];
   decisionLog: CompilationDecision[];
@@ -178,7 +178,7 @@ export interface CartReport {
 }
 
 export interface RunPaths {
-  kind: "build" | "build-recipes" | "auth-check" | "attachment-check";
+  kind: "build" | "build-recipes" | "ingredients" | "auth-check" | "attachment-check";
   runId: string;
   runDir: string;
   shoppingListPath: string;

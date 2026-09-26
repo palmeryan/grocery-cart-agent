@@ -45,6 +45,13 @@ export type CartMutationObservation =
       diagnostic: string;
     }
   | {
+      status: "rejected";
+      snapshot: CartNetworkSnapshot;
+      delta: 0;
+      records: CartNetworkResponseRecord[];
+      diagnostic: string;
+    }
+  | {
       status: "unknown";
       snapshot: CartNetworkSnapshot | null;
       delta: number | null;
@@ -74,6 +81,35 @@ function quantityMap(items: readonly CartNetworkItem[]): Map<string, number> {
     map.set(asin, (map.get(asin) ?? 0) + item.quantity);
   }
   return map;
+}
+
+function cartRejectionForAsin(body: string, asin: string): string | null {
+  try {
+    const value = JSON.parse(body) as { carts?: unknown };
+    if (!Array.isArray(value.carts)) return null;
+    for (const cart of value.carts) {
+      if (!cart || typeof cart !== "object") continue;
+      const statuses = (cart as { status?: unknown }).status;
+      if (!Array.isArray(statuses)) continue;
+      for (const status of statuses) {
+        if (!status || typeof status !== "object") continue;
+        const entry = status as { itemData?: unknown; errorMessage?: unknown; statusCode?: unknown };
+        if (typeof entry.itemData !== "string" || typeof entry.errorMessage !== "string") continue;
+        let item: { ASIN?: unknown };
+        try {
+          item = JSON.parse(entry.itemData) as { ASIN?: unknown };
+        } catch {
+          continue;
+        }
+        if (typeof item.ASIN !== "string" || item.ASIN.toUpperCase() !== asin) continue;
+        const code = typeof entry.statusCode === "string" ? ` (statusCode ${entry.statusCode})` : "";
+        return `Whole Foods rejected ${asin}: ${entry.errorMessage}${code}.`;
+      }
+    }
+  } catch {
+    // An unrecognized status payload cannot establish the reason for a no-op.
+  }
+  return null;
 }
 
 /** Extract only stable identity and quantity from Whole Foods cart JSON. */
@@ -202,7 +238,7 @@ export class CartNetworkObserver {
       };
     }
     const previous = quantityMap(before);
-    const deadline = Date.now() + (expectation.timeoutMs ?? 2_000);
+    const deadline = Date.now() + (expectation.timeoutMs ?? 10_000);
     let cursor = 0;
     let unchanged: CartNetworkSnapshot | null = null;
     let partial: CartNetworkSnapshot | null = null;
@@ -231,7 +267,14 @@ export class CartNetworkObserver {
           return { status: "confirmed", snapshot: record.snapshot, delta, records: [],
             diagnostic: `Network cart increased ${asin} by ${delta}.` };
         }
-        if (delta === 0) unchanged = record.snapshot;
+        if (delta === 0) {
+          const rejection = cartRejectionForAsin(record.body, asin);
+          if (rejection) {
+            return { status: "rejected", snapshot: record.snapshot, delta: 0, records: [],
+              diagnostic: rejection };
+          }
+          unchanged = record.snapshot;
+        }
         else if (expectation.expectedQuantity !== "positive" && delta > 0 && delta < expectation.expectedQuantity) {
           partial = record.snapshot;
           partialDelta = delta;

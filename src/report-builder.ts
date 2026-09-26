@@ -30,8 +30,8 @@ export function completeCartItemResults(
   reason: string,
 ): CartItemResult[] {
   const byId = new Map(results.map((result) => [result.ingredientId, result]));
-  return request.recipes.flatMap((recipe) =>
-    recipe.ingredients.map((ingredient) =>
+  return (request.ingredients ?? request.recipes!.flatMap((recipe) => recipe.ingredients))
+    .map((ingredient) =>
       byId.get(ingredient.id) ?? {
         ingredientId: ingredient.id,
         requested: ingredient.request,
@@ -45,8 +45,7 @@ export function completeCartItemResults(
         confidence: "low",
         failureReason: reason,
       },
-    ),
-  );
+    );
 }
 
 const emptySelection = (
@@ -238,8 +237,8 @@ export function buildFailedCartReport(input: {
   failureReason: string;
   baselineItems?: readonly CartItemSnapshot[];
 }): CartReport {
-  const selections = input.request.recipes.flatMap((recipe) =>
-    recipe.ingredients.map((ingredient) =>
+  const selections = (input.request.ingredients ?? input.request.recipes!.flatMap((recipe) => recipe.ingredients))
+    .map((ingredient) =>
       emptySelection(
         {
           ingredientId: ingredient.id,
@@ -256,8 +255,7 @@ export function buildFailedCartReport(input: {
         },
         input.failureReason,
       ),
-    ),
-  );
+    );
   const baselineItems = [...(input.baselineItems ?? [])];
   return {
     runStatus: "failed",

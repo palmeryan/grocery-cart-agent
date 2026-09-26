@@ -6,14 +6,17 @@ two paths that converge on the same validated **Shopping List**:
 1. `cart-recipes`: recipe documents → **Ingredients Agent** → deterministic
    compilation → Shopping List → harness-operated cart.
 2. `cart-list`: prebuilt Shopping List → harness-operated cart.
+3. `ingredients`: recipe documents → **Ingredients Agent** → deterministic
+   compilation, without opening Chrome or running the cart harness.
 
 The Ingredients Agent is the boundary for unstructured recipe input. It
 extracts source-preserving ingredient facts, consistent purchasable identities,
 and additive quantities. `src/shopping-list-compiler.ts` then derives
-opaque intent IDs from source membership, applies pantry and optional policy,
-consolidates matching identities, and emits the Shopping List consumed by the
-cart harness. The richer recipe compilation is saved alongside the run for
-provenance and debugging.
+opaque intent IDs from source membership, consolidates matching identities,
+and emits every extracted ingredient in the Shopping List consumed by the
+cart harness. Each source recipe appears once in that list; ingredients refer
+to the relevant recipes so cart decisions receive their full context.
+Generated lists place consolidated items in a top-level `ingredients` array.
 
 ## Current outcome
 
@@ -98,6 +101,9 @@ npm run cart-recipes -- recipe-one.md recipe-two.md
 # Direct harness path from a prebuilt Shopping List
 npm run cart-list -- path/to/shopping-list.json
 
+# Ingredients Agent and compiler only
+npm run ingredients -- recipe-one.md recipe-two.md
+
 # Example decision-model override (works with cart-list or cart-recipes)
 npm run cart-list -- path/to/shopping-list.json --model gpt-5.6-luna --effort medium
 ```
@@ -109,6 +115,8 @@ an unsupported model/effort combination when the run starts.
 Shopping Lists validate against `schemas/shopping-list.schema.json`. A full
 recipe run saves its generated list as `runs/<run-id>/shopping-list.json` and its
 source-preserving intermediate as `runs/<run-id>/recipe-compilation.json`.
+An ingredients-only run saves those same two compiled artifacts, plus the raw
+Ingredients Agent output under `runs/<run-id>/ingredients-agent/`.
 Both paths also write `runs/<run-id>/usage.json`, which rolls up every reported
 Ingredients Agent and cart-decision turn (including retries). It shows cached and
 uncached input, cache writes, output and reasoning tokens, cache rate, and a

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import type { ReasoningEffort } from "./codex.js";
-import type { CartItemSnapshot } from "./types.js";
+import type { CartItemSnapshot, GroceryIngredient, ShoppingQuantity } from "./types.js";
 import type { QuantityOption } from "./wfm-page.js";
 
 export const DECISION_MODEL = "gpt-5.6-terra" as const;
@@ -13,6 +13,7 @@ export interface DecisionTask {
   requested: string;
   preferences?: readonly string[];
   context?: string | null;
+  purchaseRequirement?: GroceryIngredient["purchaseRequirement"];
 }
 
 export interface DecisionCandidate {
@@ -32,10 +33,11 @@ export type CartDecision =
 
 export interface DecisionPromptInput {
   task: DecisionTask;
-  recipeContext?: readonly { id: string; name: string; servings: number; context: string }[];
+  recipeContext?: readonly { id?: string; name: string; context?: string; text?: string }[];
   candidates: readonly DecisionCandidate[];
   currentCart: readonly CartItemSnapshot[];
   quantityOptions?: readonly QuantityOption[];
+  selectedPackSize?: string | null;
 }
 
 export interface DecisionInvocationInput {
@@ -65,6 +67,25 @@ export function renderDecisionPrompt(input: DecisionPromptInput): string {
     JSON.stringify(input, null, 2),
     "END STOREFRONT OBSERVATION",
   ].join("\n\n");
+}
+
+export function quantityFromSelectedPackSize(
+  total: ShoppingQuantity | undefined,
+  selectedPackSize: string | null,
+  options: readonly QuantityOption[],
+): number | null {
+  if (!total || !selectedPackSize) return null;
+  const pack = /^(\d+(?:\.\d+)?)\s*(Pounds?|lbs?|Ounces?|oz|kg|g)\b/i.exec(selectedPackSize);
+  if (!pack) return null;
+  const grams = (quantity: number, unit: string): number | null => {
+    const factor = { kg: 1000, g: 1, lb: 453.59237, pound: 453.59237, oz: 28.349523125, ounce: 28.349523125 }[unit.toLowerCase().replace(/s$/, "")];
+    return factor ? quantity * factor : null;
+  };
+  const required = grams(total.quantity, total.unit);
+  const perPack = grams(Number(pack[1]), pack[2]!);
+  if (!required || !perPack) return null;
+  const count = Math.ceil(required / perPack);
+  return options.some((option) => option.quantity === count) ? count : null;
 }
 
 export function parseDecision(text: string): CartDecision {

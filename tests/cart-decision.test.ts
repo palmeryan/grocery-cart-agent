@@ -3,6 +3,7 @@ import {
   buildDecisionInvocation,
   parseAndValidateDecision,
   parseDecision,
+  quantityFromSelectedPackSize,
   renderDecisionPrompt,
   type DecisionCandidate,
 } from "../src/cart-decision.js";
@@ -51,5 +52,32 @@ describe("bounded cart decisions", () => {
     expect(prompt).toContain("The selected product opened a weighted-item quantity chooser");
     expect(prompt).toContain("1 est. 1.56 lb");
     expect(prompt).toContain("2 est. 3.12 lb");
+  });
+
+  it("passes stated pack size and chooser estimates to the weighted decision", () => {
+    const prompt = renderDecisionPrompt({
+      task: { ingredientId: "chicken", requested: "boneless skinless chicken thighs", purchaseRequirement: {
+        total: { quantity: 2.6, unit: "kg", approximate: false }, optional: false, alternatives: [], sources: ["dinner.md"],
+      } },
+      candidates: [{ id: "chicken-id", productName: "Boneless Skinless Chicken Thighs", packageSize: null, price: "$5.49/lb", available: true, text: "Sold by weight" }],
+      currentCart: [],
+      selectedPackSize: "3 Pound (Pack of 1)",
+      quantityOptions: [
+        { quantity: 1, label: "1 est. 2.75 lb" },
+        { quantity: 2, label: "2 est. 5.5 lb" },
+        { quantity: 3, label: "3 est. 8.25 lb" },
+      ],
+    });
+    expect(prompt).toContain("product's stated size");
+    expect(prompt).toContain('"selectedPackSize": "3 Pound (Pack of 1)"');
+    expect(prompt).toContain('"label": "2 est. 5.5 lb"');
+    expect(prompt).toContain('"quantity": 3');
+  });
+
+  it("uses the stated 3 lb pack size to choose two packs for 2.6 kg", () => {
+    const total = { quantity: 2.6, unit: "kg", approximate: false };
+    const options = [1, 2, 3].map((quantity) => ({ quantity, label: `${quantity} estimated` }));
+    expect(quantityFromSelectedPackSize(total, "3 Pound (Pack of 1)", options)).toBe(2);
+    expect(quantityFromSelectedPackSize(total, null, options)).toBeNull();
   });
 });

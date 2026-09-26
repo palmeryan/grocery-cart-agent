@@ -30,7 +30,7 @@ const writeTempRequest = (value: unknown): string => {
 describe("request validation", () => {
   it("loads a valid recipe-aware request", () => {
     const request = loadShoppingList(fixture("valid-shopping-list.json"));
-    expect(request.recipes[0]?.ingredients[0]?.id).toBe("chicken");
+    expect(request.recipes?.[0]?.ingredients[0]?.id).toBe("chicken");
   });
 
   it("rejects an ingredient without an amount-bearing request", () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertRecipeCompilationIntegrity, compileRecipeCompilation, type IngredientsAgentOutput } from "../src/shopping-list-compiler.js";
+import { assertRecipeCompilationIntegrity, compileRecipeCompilation, recipeCompilationToShoppingList, type IngredientsAgentOutput } from "../src/shopping-list-compiler.js";
 import { compileIngredientsList } from "../src/ingredients-agent.js";
-import type { RecipeIngredientQuantity } from "../src/types.js";
+import { cartTasks } from "../src/cart-flow.js";
+import { renderDecisionPrompt } from "../src/cart-decision.js";
+import type { RecipeIngredientQuantity, ShoppingQuantity } from "../src/types.js";
 import { parseIngredientsAgentOutput, parseRecipeCompilation } from "../src/validation.js";
 
 const quantity = (
@@ -11,10 +13,15 @@ const quantity = (
   approximate = false,
 ): RecipeIngredientQuantity => ({ quantity: value, quantityMax, unit, approximate });
 
+const chosen = (quantity: number, unit: string, approximate = false): ShoppingQuantity =>
+  ({ quantity, unit, approximate });
+
 const amount = (
   raw: string,
   sourceQuantity: RecipeIngredientQuantity | null = null,
-  additiveQuantity: RecipeIngredientQuantity | null = sourceQuantity,
+  additiveQuantity: ShoppingQuantity = sourceQuantity
+    ? chosen(sourceQuantity.quantity, sourceQuantity.unit, sourceQuantity.approximate)
+    : chosen(1, "pinch", true),
 ) => ({ raw, sourceQuantity, additiveQuantity });
 
 const line = (
@@ -28,7 +35,6 @@ const line = (
   preparation: null,
   context: null,
   optional: false,
-  pantryStatus: "buy" as const,
   alternatives: [],
   unresolved: [],
   ...overrides,
@@ -61,54 +67,94 @@ describe("Ingredients Agent deterministic compiler", () => {
     expect(plan.purchaseIntents[0]?.sourceAmounts.map(({ raw }) => raw)).toEqual([
       "2 garlic cloves", "6 garlic cloves",
     ]);
-    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(quantity(8, "clove"));
+    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(chosen(8, "clove"));
   });
 
   it("combines package totals with loose weight", () => {
     const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "bags.md", ingredients: [line("2 (12-ounce) bags frozen peas", "frozen peas", {
-        amount: amount("2 (12-ounce) bags", quantity(2, "bags"), quantity(24, "ounces")),
+        amount: amount("2 (12-ounce) bags", quantity(2, "12 oz bag"), chosen(24, "ounces")),
       })] },
       { sourceName: "loose.md", ingredients: [line("10 ounces frozen peas", "frozen peas", {
         amount: amount("10 ounces", quantity(10, "ounces")),
       })] },
     ] });
-    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(quantity(34, "oz"));
+    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(chosen(34, "oz"));
+  });
+
+  it("keeps recipe-specified can sizes in the shopping totals", () => {
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "dinner.md", ingredients: [
+      line("2 × 800 g / 28 oz cans tomatoes", "canned tomatoes", {
+        amount: amount("2 × 800 g / 28 oz cans", quantity(2, "800 g / 28 oz can"), chosen(2, "800 g / 28 oz can")),
+      }),
+      line("3 × 425 g / 15 oz cans beans", "cannellini beans", {
+        amount: amount("3 × 425 g / 15 oz cans", quantity(3, "425 g / 15 oz can"), chosen(3, "425 g / 15 oz can")),
+      }),
+    ] }] });
+    const list = recipeCompilationToShoppingList(plan, [{ sourceName: "dinner.md", text: "2 × 800 g / 28 oz cans tomatoes\n3 × 425 g / 15 oz cans beans" }]);
+    expect(list.ingredients?.map(({ purchaseRequirement }) => purchaseRequirement?.total)).toEqual([
+      chosen(2, "800 g / 28 oz can"), chosen(3, "425 g / 15 oz can"),
+    ]);
+    expect(() => compileRecipeCompilation({ recipes: [{ sourceName: "dinner.md", ingredients: [
+      line("2 × 800 g / 28 oz cans tomatoes", "canned tomatoes", {
+        amount: amount("2 × 800 g / 28 oz cans", quantity(2, "can"), chosen(2, "can")),
+      }),
+    ] }] })).toThrow(/Package size omitted/);
   });
 
   it("combines source-supported approximate equivalents", () => {
     const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "count.md", ingredients: [line("4 thighs (about 1½ pounds)", "bone-in chicken thighs", {
-        amount: amount("4 thighs (about 1½ pounds)", quantity(4, "thighs"), quantity(1.5, "pounds", null, true)),
+        amount: amount("4 thighs (about 1½ pounds)", quantity(4, "thighs"), chosen(1.5, "pounds", true)),
       })] },
       { sourceName: "weight.md", ingredients: [line("2 pounds chicken thighs", "bone-in chicken thighs", {
         amount: amount("2 pounds", quantity(2, "pounds")),
       })] },
     ] });
-    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(quantity(3.5, "lb", null, true));
+    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(chosen(3.5, "lb", true));
   });
 
-  it("preserves and sums ranges", () => {
+  it("preserves source ranges but sums one chosen shopping quantity", () => {
     const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("2–3 limes", "lime", {
-        amount: amount("2–3 limes", quantity(2, "limes", 3)),
+        amount: amount("2–3 limes", quantity(2, "limes", 3), chosen(3, "lime")),
       })] },
       { sourceName: "b.md", ingredients: [line("1 lime", "lime", {
         amount: amount("1 lime", quantity(1, "lime")),
       })] },
     ] });
-    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(quantity(3, "lime", 4));
+    expect(plan.recipes[0]?.ingredients[0]?.amount.sourceQuantity).toEqual(quantity(2, "limes", 3));
+    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(chosen(4, "lime"));
   });
 
-  it("retains incompatible amounts without fabricating a total", () => {
-    const plan = compileRecipeCompilation({ recipes: [
+  it("buys whole items after summing fractional recipe needs", () => {
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "dinner.md", ingredients: [
+      line("Juice of ½ lemon for chicken", "lemon", { amount: amount("½ lemon", quantity(0.5, "lemon")) }),
+      line("Juice of ½ lemon for salad", "lemon", { amount: amount("½ lemon", quantity(0.5, "lemon")) }),
+      line("15 g lemon juice", "lemon", { amount: amount("15 g", quantity(15, "g"), chosen(0.5, "lemon", true)) }),
+    ] }] });
+    const list = recipeCompilationToShoppingList(plan, [{ sourceName: "dinner.md", text: "Juice of ½ lemon for chicken\nJuice of ½ lemon for salad\n15 g lemon juice" }]);
+    expect(plan.purchaseIntents[0]?.additiveAmount).toEqual(chosen(1.5, "lemon", true));
+    expect(list.ingredients?.[0]?.purchaseRequirement?.total).toEqual(chosen(2, "lemon"));
+  });
+
+  it("uses a whole singular item unit for an inferred optional tomato", () => {
+    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "dinner.md", ingredients: [
+      line("Chopped tomato, optional", "tomato", {
+        amount: amount("Chopped tomato", null, chosen(1, "tomatoes", true)), optional: true,
+      }),
+    ] }] });
+    const list = recipeCompilationToShoppingList(plan, [{ sourceName: "dinner.md", text: "Chopped tomato, optional" }]);
+    expect(list.ingredients?.[0]?.purchaseRequirement?.total).toEqual(chosen(1, "tomato"));
+  });
+
+  it("rejects incompatible chosen units instead of emitting a missing total", () => {
+    expect(() => compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("mint for serving", "fresh mint")] },
       { sourceName: "b.md", ingredients: [line("½ cup mint", "fresh mint", {
         amount: amount("½ cup", quantity(0.5, "cup")),
       })] },
-    ] });
-    expect(plan.purchaseIntents[0]?.additiveAmount).toBeNull();
-    expect(plan.decisionLog.some(({ code }) => code === "incompatible_amounts")).toBe(true);
+    ] })).toThrow(/incompatible shopping units/i);
   });
 
   it("derives intent IDs from source membership rather than model wording", () => {
@@ -146,46 +192,16 @@ describe("Ingredients Agent deterministic compiler", () => {
     expect(first.purchaseIntents[0]?.id).not.toBe(second.purchaseIntents[0]?.id);
   });
 
-  it("buys uncertain pantry items and reports the source", () => {
+  it("includes seasonings, cooking fats, and optional ingredients in the shopping list", () => {
     const plan = compileRecipeCompilation({ recipes: [{ sourceName: "soup.md", ingredients: [
-      line("seasoning blend", "seasoning blend", { pantryStatus: "uncertain" }),
-    ] }] });
-    expect(plan.purchaseIntents[0]?.disposition).toBe("buy");
-    expect(plan.decisionLog[0]).toMatchObject({
-      priority: "high",
-      code: "unresolved_interpretation",
-      sources: [{ sourceName: "soup.md", sourceText: "seasoning blend" }],
-    });
-  });
-
-  it("reports consolidated pantry uncertainty once and never claims an omitted optional is bought", () => {
-    const plan = compileRecipeCompilation({ recipes: [
-      { sourceName: "one.md", ingredients: [line("seasoning blend", "seasoning blend", { pantryStatus: "uncertain" })] },
-      { sourceName: "two.md", ingredients: [line("seasoning blend", "seasoning blends", { pantryStatus: "uncertain" })] },
-      { sourceName: "three.md", ingredients: [line("finishing oil, optional", "finishing oil", {
-        optional: true,
-        pantryStatus: "uncertain",
-      })] },
-    ] });
-
-    const uncertainty = plan.decisionLog.filter(({ code }) => code === "unresolved_interpretation");
-    expect(uncertainty).toHaveLength(1);
-    expect(uncertainty[0]?.sources).toHaveLength(2);
-    expect(plan.decisionLog.find(({ code }) => code === "optional_omitted")?.message).toContain("finishing oil");
-    expect(plan.decisionLog.some(({ message }) => message.includes("finishing oil") && message.includes("buy list"))).toBe(false);
-  });
-
-  it("reports optional and pantry omissions while retaining every source", () => {
-    const plan = compileRecipeCompilation({ recipes: [{ sourceName: "soup.md", ingredients: [
-      line("salt", "salt", { pantryStatus: "assume_pantry" }),
+      line("salt", "salt"),
+      line("olive oil", "olive oil"),
       line("fresh dill, optional", "fresh dill", { optional: true }),
     ] }] });
-    expect(plan.recipes[0]?.ingredients.map(({ disposition }) => disposition)).toEqual([
-      "assume_pantry", "omit_optional",
-    ]);
-    expect(plan.decisionLog.map(({ code }) => code)).toEqual([
-      "pantry_assumption", "optional_omitted",
-    ]);
+    expect(plan.purchaseIntents.map(({ primary }) => primary.name)).toEqual(["salt", "olive oil", "fresh dill"]);
+    expect(recipeCompilationToShoppingList(plan, [{ sourceName: "soup.md", text: "salt\nolive oil\nfresh dill, optional" }]).ingredients).toHaveLength(3);
+    expect(plan.purchaseIntents[2]?.optional).toBe(true);
+    expect(plan.decisionLog).toEqual([]);
   });
 
   it("gives split components unique source references while retaining the full line", () => {
@@ -215,7 +231,19 @@ describe("recipe-document compiler seam", () => {
       sourceName: "one.md",
       ingredients: [line("2 apples", "apple", { amount: amount("2 apples", quantity(2, "apples")) })],
     }] }));
-    expect(shoppingList.recipes[0]?.ingredients[0]?.request).toContain("2 apples");
+    expect(shoppingList.ingredients?.[0]?.request).toBe("apple");
+    expect(shoppingList.ingredients?.[0]?.purchaseRequirement).toMatchObject({
+      total: chosen(2, "apple"),
+      optional: false,
+      sources: ["one.md"],
+    });
+    expect(shoppingList.sourceRecipes).toEqual(documents);
+    const task = cartTasks(shoppingList)[0]!;
+    expect(task.recipeContext).toEqual([{ name: "one.md", text: "2 apples" }]);
+    expect(renderDecisionPrompt({
+      task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, purchaseRequirement: task.ingredient.purchaseRequirement },
+      recipeContext: task.recipeContext, candidates: [], currentCart: [],
+    })).toContain('"text": "2 apples"');
 
     await expect(compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "renamed.md",

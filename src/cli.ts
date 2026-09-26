@@ -40,8 +40,8 @@ import {
   CartNetworkObserver,
   type CartNetworkSnapshot,
 } from "./cart-network.js";
-import { DECISION_MODEL, DECISION_REASONING_EFFORT, buildDecisionInvocation, parseAndValidateDecision, renderDecisionPrompt } from "./cart-decision.js";
-import { cartTasks, runCartFlow, type CartFlowResult } from "./cart-flow.js";
+import { DECISION_MODEL, DECISION_REASONING_EFFORT, buildDecisionInvocation, parseAndValidateDecision, quantityFromSelectedPackSize, renderDecisionPrompt } from "./cart-decision.js";
+import { CartNoMutationError, CartRunFatalError, cartTasks, runCartFlow, type CartFlowResult } from "./cart-flow.js";
 import { runIngredientsAgent, type RecipeDocument } from "./ingredients-agent.js";
 import {
   createPlaywrightCartPageAdapter,
@@ -112,6 +112,7 @@ export interface SignalHandlerOptions {
 
 const USAGE = `usage: cart build <shopping-list.json> [--model <model>] [--effort <effort>]
        cart build-recipes <recipe-file> [recipe-file ...] [--model <model>] [--effort <effort>]
+       cart ingredients <recipe-file> [recipe-file ...]
        cart auth-check
        cart attachment-check`;
 
@@ -211,7 +212,7 @@ export const parseCommand = (
   cartDecisionReasoningEffort?: ReasoningEffort;
 } | null => {
   const command = argv[0];
-  if (command === "build" || command === "build-recipes") {
+  if (command === "build" || command === "build-recipes" || command === "ingredients") {
     const paths: string[] = [];
     let cartDecisionModel: string | undefined;
     let cartDecisionReasoningEffort: ReasoningEffort | undefined;
@@ -246,6 +247,9 @@ export const parseCommand = (
     }
     if (command === "build-recipes" && paths.length >= 1) {
       return { command, recipePaths: paths, ...settings };
+    }
+    if (command === "ingredients" && paths.length >= 1 && Object.keys(settings).length === 0) {
+      return { command, recipePaths: paths };
     }
     return null;
   }
@@ -333,7 +337,7 @@ export async function runCli(
         }
         if (
           paths &&
-          (command === "build" || command === "build-recipes")
+          (command === "build" || command === "build-recipes" || command === "ingredients")
         ) {
           try {
             const timingPath = join(paths.runDir, "timings.json");
@@ -393,8 +397,11 @@ export async function runCli(
 
   try {
     const config = loadConfig(dependencies.env ?? process.env, rootDir);
-    assertExecutable(config.chromeExecutable, "Chrome executable");
     const isCartBuild = parsed.command === "build" || parsed.command === "build-recipes";
+    const isRecipeCompilation = parsed.command === "build-recipes" || parsed.command === "ingredients";
+    if (isCartBuild || parsed.command === "auth-check" || parsed.command === "attachment-check") {
+      assertExecutable(config.chromeExecutable, "Chrome executable");
+    }
 
     let request: ShoppingList | undefined;
     let recipeDocuments: RecipeDocument[] | undefined;
@@ -402,7 +409,7 @@ export async function runCli(
     if (parsed.command === "build") {
       requestSource = resolve(parsed.shoppingListPath!);
       request = loadShoppingList(requestSource);
-    } else if (parsed.command === "build-recipes") {
+    } else if (isRecipeCompilation) {
       const sources = parsed.recipePaths!.map((path) => resolve(path));
       recipeDocuments = sources.map((path) => ({
         sourceName: basename(path),
@@ -416,7 +423,7 @@ export async function runCli(
       }
       requestSource = sources.map((path) => basename(path)).join(",");
     }
-    const requestSha256 = isCartBuild
+    const requestSha256 = isCartBuild || isRecipeCompilation
       ? sha256(canonicalShoppingList(request ?? recipeDocuments))
       : sha256(parsed.command);
 
@@ -424,7 +431,7 @@ export async function runCli(
     lockAcquired = true;
 
     paths = createRunPaths(rootDir, new Date(), parsed.command);
-    if (isCartBuild) {
+    if (isCartBuild || isRecipeCompilation) {
       if (parsed.command === "build") {
         writeShoppingListSnapshot(requestSource!, paths.shoppingListPath);
       }
@@ -433,7 +440,7 @@ export async function runCli(
         reasoningEffort: cartDecisionReasoningEffort,
         cartDecisionModel: cartDecisionModel,
         cartDecisionReasoningEffort: cartDecisionReasoningEffort,
-        ...(parsed.command === "build-recipes"
+        ...(isRecipeCompilation
           ? {
               ingredientsAgentModel: INGREDIENTS_AGENT_MODEL,
               ingredientsAgentReasoningEffort: INGREDIENTS_AGENT_REASONING_EFFORT,
@@ -442,7 +449,7 @@ export async function runCli(
       });
     }
 
-    if (parsed.command === "build-recipes") {
+    if (isRecipeCompilation) {
       try {
         const ingredientsDir = join(paths.runDir, "ingredients-agent");
         mkdirSync(ingredientsDir, { recursive: true, mode: 0o700 });
@@ -466,6 +473,38 @@ export async function runCli(
           `${JSON.stringify(compiled.recipeCompilation, null, 2)}\n`,
           { mode: 0o600 },
         );
+        if (parsed.command === "ingredients") {
+          console.log(`Ingredients compilation: ${paths.runDir}`);
+          console.log("\nShopping list:");
+          for (const ingredient of request.ingredients ?? []) {
+            const requirement = ingredient.purchaseRequirement!;
+            const sourceIntent = compiled.recipeCompilation.purchaseIntents.find(({ id }) => id === ingredient.id)!;
+            console.log(`- ${ingredient.request}${requirement.optional ? " (optional)" : ""}`);
+            const { quantity, approximate } = requirement.total;
+            const packageAmount = sourceIntent.sourceAmounts.length === 1
+              ? sourceIntent.sourceAmounts[0]?.raw.match(/^\d+\s*[×x]\s*.+\bcans?$/i)?.[0]
+              : undefined;
+            let unit = requirement.total.unit;
+            if (!packageAmount && quantity !== 1) {
+              const plurals: Record<string, string> = {
+                clove: "cloves", lemon: "lemons", onion: "onions", pita: "pitas",
+                tomato: "tomatoes", cucumber: "cucumbers", can: "cans",
+                package: "packages", bunch: "bunches", loaf: "loaves", bulb: "bulbs",
+              };
+              unit = unit.replace(/\b(clove|lemon|onion|pita|tomato|cucumber|can|package|bunch|loaf|bulb)$/i,
+                (noun) => plurals[noun.toLowerCase()] ?? noun);
+            }
+            console.log(`  Total: ${approximate ? "about " : ""}${packageAmount ?? `${quantity} ${unit}`}`);
+            for (const source of sourceIntent.sourceLines) {
+              console.log(`  ${source.sourceName}: ${source.sourceText}`);
+            }
+            for (const alternative of requirement.alternatives) {
+              console.log(`  Alternative: ${alternative.name} — ${alternative.guidance}`);
+            }
+          }
+          exitCode = 0;
+          return await finish();
+        }
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         exitCode = 1;
@@ -684,14 +723,15 @@ export async function runCli(
         removeNavigationGuard = await guardShoppingNavigation(context, (url) => { blockedNavigation = url; });
         cartNetworkObserver = new CartNetworkObserver(shoppingPage);
         const decisionAttempts = new Map<string, number>();
-        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, cart: readonly CartItemSnapshot[], quantityOptions?: readonly QuantityOption[]) => {
+        let networkDiagnosticCount = 0;
+        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, cart: readonly CartItemSnapshot[], quantityOptions?: readonly QuantityOption[], selectedPackSize?: string | null) => {
           const itemDir = join(paths!.runDir, "cart-decision", task.ingredient.id);
           mkdirSync(itemDir, { recursive: true, mode: 0o700 });
           const attempt = (decisionAttempts.get(task.ingredient.id) ?? 0) + 1;
           decisionAttempts.set(task.ingredient.id, attempt);
           const outputPath = join(itemDir, `decision-${attempt}.json`);
           const invocation = buildDecisionInvocation({ rootDir, outputPath, schemaPath: join(rootDir, DECISION_SCHEMA_PATH), model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort });
-          const result = await runCodex({ executable: config.codexBin, args: invocation.args, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null }, recipeContext: task.recipeContext, candidates, currentCart: cart, ...(quantityOptions ? { quantityOptions } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
+          const result = await runCodex({ executable: config.codexBin, args: invocation.args, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null, ...(task.ingredient.purchaseRequirement ? { purchaseRequirement: task.ingredient.purchaseRequirement } : {}) }, recipeContext: task.recipeContext, candidates, currentCart: cart, ...(quantityOptions ? { quantityOptions, selectedPackSize: selectedPackSize ?? null } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
           if (result.exitCode !== 0 || result.timedOut) throw new Error("Cart decision Codex invocation failed");
           return parseAndValidateDecision(readFileSync(outputPath, "utf8"), candidates, cart);
         };
@@ -699,8 +739,7 @@ export async function runCli(
           tasks,
           baseline: baseline.items,
           search: async (query) => {
-            if (blockedNavigation) throw new Error(`Blocked shopping navigation: ${blockedNavigation}`);
-            await shoppingPage!.goto(WHOLE_FOODS_URL);
+            if (blockedNavigation) throw new CartRunFatalError(`Blocked shopping navigation: ${blockedNavigation}`);
             return searchProducts(shoppingPage!, query);
           },
           decide,
@@ -711,11 +750,20 @@ export async function runCli(
             let weighted = false;
             let weightedReason: string | null = null;
             try {
-              const added = await addCandidate(shoppingPage!, candidate, quantity, option ?? undefined, async (quantityOptions) => {
+              const added = await addCandidate(shoppingPage!, candidate, quantity, option ?? undefined, async (quantityOptions, selectedPackSize) => {
+                const itemDir = join(paths!.runDir, "cart-decision", task.ingredient.id);
+                const computed = quantityFromSelectedPackSize(task.ingredient.purchaseRequirement?.total, selectedPackSize, quantityOptions);
+                writeFileSync(join(itemDir, `quantity-evidence-${decisionAttempts.get(task.ingredient.id) ?? 0}.json`), `${JSON.stringify({ candidateId: candidate.id, selectedPackSize, quantityOptions, computedQuantity: computed }, null, 2)}\n`, { mode: 0o600 });
+                if (computed !== null) {
+                  selectedQuantity = computed;
+                  weightedReason = `${computed} × ${selectedPackSize} covers ${task.ingredient.purchaseRequirement!.total.quantity} ${task.ingredient.purchaseRequirement!.total.unit}.`;
+                  weighted = true;
+                  return computed;
+                }
                 const started = Date.now();
                 let choice;
                 try {
-                  choice = await decide(task, [candidate], cart, quantityOptions);
+                  choice = await decide(task, [candidate], cart, quantityOptions, selectedPackSize);
                 } finally {
                   recordAdditionalDecision(Date.now() - started);
                 }
@@ -738,11 +786,15 @@ export async function runCli(
             });
             if (blockedNavigation) throw new Error(`Blocked shopping navigation: ${blockedNavigation}`);
             if (outcome.status === "confirmed") return { snapshot: outcome.snapshot, quantity: selectedQuantity, reason: weightedReason };
+            networkDiagnosticCount += 1;
             writeFileSync(
-              join(paths!.runDir, "cart-network-diagnostic.json"),
+              join(paths!.runDir, `cart-network-diagnostic-${networkDiagnosticCount}.json`),
               `${JSON.stringify(outcome, null, 2)}\n`,
               { mode: 0o600 },
             );
+            if (outcome.status === "rejected" || outcome.status === "no_mutation") {
+              throw new CartNoMutationError(outcome.diagnostic, outcome.snapshot);
+            }
             if (clickError) {
               throw new Error(`${clickError instanceof Error ? clickError.message : String(clickError)}; ${outcome.diagnostic}`, { cause: clickError });
             }

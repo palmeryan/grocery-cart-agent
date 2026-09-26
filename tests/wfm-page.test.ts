@@ -2,7 +2,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { addCandidate, extractCandidates, searchProducts, UnknownControlError, WfmPageError } from "../src/wfm-page.js";
+import { addCandidate, extractCandidates, parseSelectedPackSize, searchProducts, UnknownControlError, WfmPageError } from "../src/wfm-page.js";
 
 let browser: Browser | undefined;
 let page: Page;
@@ -13,13 +13,23 @@ const runBrowserFixtures = process.env.WFM_BROWSER_FIXTURES === "1";
 beforeAll(async () => {
   if (!runBrowserFixtures) return;
   browser = await chromium.launch({ headless: true, executablePath: browserExecutable });
-  page = await browser.newPage();
-  await page.route("**/*", async (route) => await route.fulfill({ status: 200, contentType: "text/html", body: "<html><body></body></html>" }));
+  page = await (await browser.newContext()).newPage();
+  await page.route("**/*", async (route) => {
+    const query = new URL(route.request().url()).searchParams.get("k");
+    const body = query === null ? "<html><body></body></html>"
+      : query === "unlikely ingredient" ? `<p>0 results for "${query}"</p>`
+      : `<p>1 results for "${query}"</p><div><a href="/grocery/product/${query === "rice" ? "rice-b0xyz12345" : "soy-b0soy12345"}"><h2>${query === "rice" ? "Rice" : "Soy sauce"}</h2></a><button>Add to Cart</button></div>`;
+    await route.fulfill({ status: 200, contentType: "text/html", body });
+  });
   await page.goto("https://www.wholefoodsmarket.com/grocery/search");
 });
 afterAll(async () => await browser?.close());
 
 describe("WFM page adapter", () => {
+  it("reads the selected product size, not the other available variants", () => {
+    expect(parseSelectedPackSize("Select Size: 3 Pound (Pack of 1)\n1.5 Pound (Pack of 1)\n3 Pound (Pack of 1)"))
+      .toBe("3 Pound (Pack of 1)");
+  });
   it.skipIf(!runBrowserFixtures)("extracts cards in the CLI's tsx runtime", () => {
     execFileSync(
       fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url)),
@@ -34,25 +44,25 @@ describe("WFM page adapter", () => {
     await expect(extractCandidates(page)).resolves.toEqual([expect.objectContaining({ id: "b0abc12345", productName: "Organic beans", packageSize: "15 oz", price: "$2.99", available: true })]);
   });
 
-  it.skipIf(!runBrowserFixtures)("searches with the semantic textbox and returns cards", async () => {
-    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter'){history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value));document.querySelector('#results').textContent='1 results for '+String.fromCharCode(34)+this.value+String.fromCharCode(34)}" /><p id="results"></p><div><a href="/grocery/product/rice-b0xyz12345"><h2>Rice</h2></a><button>Add to cart</button></div>`);
-    await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
+  it.skipIf(!runBrowserFixtures)("opens the encoded query URL and returns its cards", async () => {
     const products = await searchProducts(page, "rice");
     expect(products[0]?.id).toBe("b0xyz12345");
-    expect(await page.locator("input").inputValue()).toBe("rice");
+    expect(new URL(page.url()).searchParams.get("k")).toBe("rice");
   });
 
   it.skipIf(!runBrowserFixtures)("returns an empty result set so the model can request a revised query", async () => {
-    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter'){history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value));document.querySelector('#results').textContent='0 results for '+String.fromCharCode(34)+this.value+String.fromCharCode(34)}" /><p id="results"></p>`);
-    await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
     await expect(searchProducts(page, "unlikely ingredient")).resolves.toEqual([]);
   });
 
   it.skipIf(!runBrowserFixtures)("waits for results for the new query rather than stale cards", async () => {
-    await page.setContent(`<input role="combobox" aria-label="Search" type="search" onkeydown="if(event.key==='Enter'){history.pushState(null,'','/grocery/search?k='+encodeURIComponent(this.value));setTimeout(()=>{document.querySelector('#results').textContent='1 results for '+String.fromCharCode(34)+this.value+String.fromCharCode(34);document.querySelector('#card').innerHTML='<a href=&quot;/grocery/product/soy-b0soy12345&quot;><h2>Soy sauce</h2></a><button>Add to Cart</button>'},150)}" /><p id="results">1 results for "old query"</p><div id="card"><a href="/grocery/product/old-b0old12345"><h2>Old result</h2></a><button>Add to Cart</button></div>`);
-    await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
-    const products = await searchProducts(page, "soy sauce");
-    expect(products.map(({ productName }) => productName)).toEqual(["Soy sauce"]);
+    const handler = async (route: import("playwright").Route) => route.fulfill({ status: 200, contentType: "text/html", body: `<p id="results">1 results for "old query"</p><div id="card"><a href="/grocery/product/old-b0old12345"><h2>Old result</h2></a><button>Add to Cart</button></div><script>setTimeout(()=>{document.querySelector('#results').textContent='1 results for "soy sauce"';document.querySelector('#card').innerHTML='<a href="/grocery/product/soy-b0soy12345"><h2>Soy sauce</h2></a><button>Add to Cart</button>'},150)</script>` });
+    await page.route("**/grocery/search?k=soy+sauce", handler);
+    try {
+      const products = await searchProducts(page, "soy sauce");
+      expect(products.map(({ productName }) => productName)).toEqual(["Soy sauce"]);
+    } finally {
+      await page.unroute("**/grocery/search?k=soy+sauce", handler);
+    }
   });
 
   it.skipIf(!runBrowserFixtures)("adds only the selected card and its associated quantity", async () => {
@@ -78,16 +88,25 @@ describe("WFM page adapter", () => {
   });
 
   it.skipIf(!runBrowserFixtures)("chooses a weighted option before the final Add", async () => {
-    await page.setContent(`<div><a href="/grocery/product/chicken-b0787whrnp"><h2>Chicken thighs</h2></a><button onclick="this.dataset.clicks=String(Number(this.dataset.clicks||0)+1);document.querySelector('[role=listbox]').hidden=false">Add to Cart</button><div role="listbox" aria-label="Select quantity" hidden><div role="option" onclick="this.parentElement.hidden=true">1 est. 1.56 lb</div><div role="option" onclick="this.parentElement.hidden=true">2 est. 3.12 lb</div></div></div>`);
-    await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
-    let observed = "";
-    const result = await addCandidate(page, { id: "b0787whrnp", productName: "Chicken thighs", packageSize: null, price: "$5.99", available: true, text: "$5.99/lb" }, 2, undefined, async (options) => {
-      observed = options.map(({ label }) => label).join(" | ");
-      return 1;
-    });
-    expect(observed).toContain("1 est. 1.56 lb");
-    expect(result).toEqual({ quantity: 1, weighted: true });
-    expect(await page.getByRole("button", { name: "Add to Cart" }).getAttribute("data-clicks")).toBe("2");
+    const productRoute = async (route: import("playwright").Route) => route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Chicken thighs</h1><p>Select Size: 3 Pound (Pack of 1)</p><p>1.5 Pound (Pack of 1)</p>" });
+    await page.context().route("**/grocery/product/chicken-b0787whrnp", productRoute);
+    try {
+      await page.setContent(`<div><a href="/grocery/product/chicken-b0787whrnp"><h2>Chicken thighs</h2></a><button onclick="this.dataset.clicks=String(Number(this.dataset.clicks||0)+1);document.querySelector('[role=listbox]').hidden=false">Add to Cart</button><div role="listbox" aria-label="Select quantity" hidden><div role="option" onclick="this.parentElement.hidden=true">1 est. 1.56 lb</div><div role="option" onclick="this.parentElement.hidden=true">2 est. 3.12 lb</div></div></div>`);
+      await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
+      let observed = "";
+      let selectedSize: string | null = null;
+      const result = await addCandidate(page, { id: "b0787whrnp", productName: "Chicken thighs", packageSize: null, price: "$5.99", available: true, text: "$5.99/lb" }, 2, undefined, async (options, packSize) => {
+        observed = options.map(({ label }) => label).join(" | ");
+        selectedSize = packSize;
+        return 1;
+      });
+      expect(observed).toContain("1 est. 1.56 lb");
+      expect(selectedSize).toBe("3 Pound (Pack of 1)");
+      expect(result).toEqual({ quantity: 1, weighted: true });
+      expect(await page.getByRole("button", { name: "Add to Cart" }).getAttribute("data-clicks")).toBe("2");
+    } finally {
+      await page.context().unroute("**/grocery/product/chicken-b0787whrnp", productRoute);
+    }
   });
 
   it.skipIf(!runBrowserFixtures)("rejects stale IDs, unknown controls, and non-WFM pages", async () => {

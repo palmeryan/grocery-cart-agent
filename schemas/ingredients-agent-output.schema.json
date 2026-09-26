@@ -21,6 +21,16 @@
         "approximate": { "type": "boolean" }
       }
     },
+    "shoppingQuantity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quantity", "unit", "approximate"],
+      "properties": {
+        "quantity": { "type": "number", "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "minLength": 1 },
+        "approximate": { "type": "boolean" }
+      }
+    },
     "amount": {
       "type": "object",
       "additionalProperties": false,
@@ -32,8 +42,7 @@
           "description": "The primary count or measurement as written."
         },
         "additiveQuantity": {
-          "anyOf": [{ "$ref": "#/$defs/quantity" }, { "type": "null" }],
-          "description": "A source-supported quantity normalized to a unit shared by compatible plan items."
+          "$ref": "#/$defs/shoppingQuantity"
         }
       }
     },
@@ -58,7 +67,7 @@
     "ingredient": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceText", "name", "amount", "preparation", "context", "optional", "pantryStatus", "alternatives", "unresolved"],
+      "required": ["sourceText", "name", "amount", "preparation", "context", "optional", "alternatives", "unresolved"],
       "properties": {
         "sourceText": { "type": "string", "minLength": 1, "description": "Entire verbatim source line, repeated for every independently purchasable component." },
         "name": { "type": "string", "minLength": 1, "description": "Plan-wide canonical purchasable identity with only compatibility-relevant qualifiers." },
@@ -66,7 +75,6 @@
         "preparation": { "type": ["string", "null"] },
         "context": { "type": ["string", "null"] },
         "optional": { "type": "boolean" },
-        "pantryStatus": { "type": "string", "enum": ["buy", "assume_pantry", "uncertain"] },
         "alternatives": { "type": "array", "items": { "$ref": "#/$defs/alternative" } },
         "unresolved": { "type": "array", "items": { "$ref": "#/$defs/unresolved" } }
       }
