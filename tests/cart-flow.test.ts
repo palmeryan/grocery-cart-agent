@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cartTasks, runCartFlow } from "../src/cart-flow.js";
+import { CartNoMutationError, CartRunFatalError, cartTasks, runCartFlow } from "../src/cart-flow.js";
 import type { ProductCandidate } from "../src/wfm-page.js";
 import type { ShoppingList } from "../src/types.js";
 
@@ -71,6 +71,87 @@ describe("harness cart flow", () => {
     expect(result.timings[0]?.outcome).toBe("failed");
   });
 
+  it("retries a rejected product once with a different SKU and continues shopping", async () => {
+    const attempted: string[] = [];
+    const seenCandidates: string[][] = [];
+    const result = await runCartFlow({
+      tasks: cartTasks(list), baseline: [],
+      search: async (query) => query === "rice"
+        ? [candidate("RICE1", "Rice one"), candidate("RICE2", "Rice two")]
+        : [candidate("BEANS", "Beans")],
+      decide: async (_task, candidates) => {
+        seenCandidates.push(candidates.map((item) => item.id));
+        return { action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null };
+      },
+      add: async (_task, selected, _quantity, _option, before) => {
+        attempted.push(selected.id);
+        const snapshot = { items: [...before], observedAt: "now", url: "https://www.wholefoodsmarket.com/api/wwos/cart", method: "POST", status: 200 };
+        if (selected.id === "RICE1") throw new CartNoMutationError("Whole Foods rejected RICE1: itemRemovedRegionMismatch.", snapshot);
+        return { ...snapshot, items: [...before, { asin: selected.id, quantity: 1 }] };
+      },
+    });
+    expect(attempted).toEqual(["RICE1", "RICE2", "BEANS"]);
+    expect(seenCandidates).toEqual([["RICE1", "RICE2"], ["RICE2"], ["BEANS"]]);
+    expect(result.results.map((item) => item.status)).toEqual(["added", "added"]);
+    expect(result.results[0]?.rationale).toContain("itemRemovedRegionMismatch");
+    expect(result.stopped).toBe(false);
+    expect(result.timings[0]?.modelCalls).toBe(2);
+  });
+
+  it("logs exhausted product rejections as a skipped item and continues", async () => {
+    const attempted: string[] = [];
+    const result = await runCartFlow({
+      tasks: cartTasks(list), baseline: [],
+      search: async (query) => query === "rice"
+        ? [candidate("RICE1", "Rice one"), candidate("RICE2", "Rice two")]
+        : [candidate("BEANS", "Beans")],
+      decide: async (_task, candidates) => ({ action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null }),
+      add: async (_task, selected, _quantity, _option, before) => {
+        attempted.push(selected.id);
+        const snapshot = { items: [...before], observedAt: "now", url: "https://www.wholefoodsmarket.com/api/wwos/cart", method: "POST", status: 200 };
+        if (selected.id !== "BEANS") throw new CartNoMutationError(`Whole Foods rejected ${selected.id}: itemRemovedRegionMismatch.`, snapshot);
+        return { ...snapshot, items: [...before, { asin: selected.id, quantity: 1 }] };
+      },
+    });
+    expect(attempted).toEqual(["RICE1", "RICE2", "BEANS"]);
+    expect(result.results.map((item) => item.status)).toEqual(["skipped", "added"]);
+    expect(result.results[0]?.failureReason).toContain("RICE2");
+    expect(result.stopped).toBe(false);
+  });
+
+  it.each(["search", "decision"] as const)("skips a %s error and still shops the next ingredient", async (brokenStage) => {
+    const result = await runCartFlow({
+      tasks: cartTasks(list), baseline: [],
+      search: async (query) => {
+        if (brokenStage === "search" && query === "rice") throw new Error("search locator changed");
+        return [candidate(query.toUpperCase(), query)];
+      },
+      decide: async (task, candidates) => {
+        if (brokenStage === "decision" && task.ingredient.id === "rice") throw new Error("invalid decision output");
+        return { action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null };
+      },
+      add: async (_task, selected, _quantity, _option, before) => ({
+        items: [...before, { asin: selected.id, quantity: 1 }], observedAt: "now",
+        url: "https://www.wholefoodsmarket.com/api/wwos/cart", method: "POST", status: 200,
+      }),
+    });
+    expect(result.results.map((item) => item.status)).toEqual(["skipped", "added"]);
+    expect(result.results[0]?.failureReason).toContain(brokenStage);
+    expect(result.stopped).toBe(false);
+  });
+
+  it("stops on a fatal run-level condition", async () => {
+    const result = await runCartFlow({
+      tasks: cartTasks(list), baseline: [],
+      search: async () => { throw new CartRunFatalError("blocked navigation"); },
+      decide: async () => { throw new Error("unreachable"); },
+      add: async () => { throw new Error("unreachable"); },
+    });
+    expect(result.stopped).toBe(true);
+    expect(result.results).toHaveLength(1);
+    expect(result.failure?.reason).toContain("blocked navigation");
+  });
+
   it("does not select a candidate with unknown availability", async () => {
     const result = await runCartFlow({
       tasks: cartTasks({ recipes: [{ ...list.recipes[0]!, ingredients: [list.recipes[0]!.ingredients[0]!] }] }),
@@ -79,8 +160,8 @@ describe("harness cart flow", () => {
       decide: async () => ({ action: "select", candidateId: "B000000001", quantity: 1, option: null, reason: null }),
       add: async () => { throw new Error("must not add"); },
     });
-    expect(result.failure?.stage).toBe("decision");
-    expect(result.failure?.mayHaveCommitted).toBe(false);
+    expect(result.results[0]?.status).toBe("skipped");
+    expect(result.stopped).toBe(false);
   });
 
   it("counts a weighted chooser decision and reports its resolved quantity", async () => {

@@ -63,18 +63,28 @@ const uniqueDuplicates = (values: string[]): string[] => {
 };
 
 export function assertShoppingListIdentity(shoppingList: ShoppingList): void {
-  const recipeIds = shoppingList.recipes.map((recipe) => recipe.id);
-  const ingredientIds = shoppingList.recipes.flatMap((recipe) =>
-    recipe.ingredients.map((ingredient) => ingredient.id),
-  );
+  const recipeIds = shoppingList.recipes?.map((recipe) => recipe.id) ?? [];
+  const ingredients = shoppingList.ingredients ?? shoppingList.recipes!.flatMap((recipe) => recipe.ingredients);
+  const ingredientIds = ingredients.map((ingredient) => ingredient.id);
   const duplicateRecipes = uniqueDuplicates(recipeIds);
   const duplicateIngredients = uniqueDuplicates(ingredientIds);
+  const sourceNames = shoppingList.sourceRecipes?.map(({ sourceName }) => sourceName) ?? [];
+  const knownSources = new Set(sourceNames);
+  const missingSources = [...new Set(ingredients.flatMap((ingredient) =>
+    ingredient.purchaseRequirement?.sources ?? [],
+  ).filter((sourceName) => !knownSources.has(sourceName)))];
   const problems = [
     duplicateRecipes.length > 0
       ? `duplicate recipe IDs: ${duplicateRecipes.join(", ")}`
       : "",
     duplicateIngredients.length > 0
       ? `duplicate ingredient IDs: ${duplicateIngredients.join(", ")}`
+      : "",
+    uniqueDuplicates(sourceNames).length > 0
+      ? `duplicate source recipes: ${uniqueDuplicates(sourceNames).join(", ")}`
+      : "",
+    missingSources.length > 0
+      ? `missing source recipes: ${missingSources.join(", ")}`
       : "",
   ].filter(Boolean);
   if (problems.length > 0) {
@@ -122,11 +132,8 @@ export function assertReportMatchesShoppingList(
   report: CartReport,
   request: ShoppingList,
 ): void {
-  const requested = new Set(
-    request.recipes.flatMap((recipe) =>
-      recipe.ingredients.map((ingredient) => ingredient.id),
-    ),
-  );
+  const requested = new Set((request.ingredients ?? request.recipes!.flatMap((recipe) => recipe.ingredients))
+    .map((ingredient) => ingredient.id));
   const reported = report.selections.map((selection) => selection.ingredientId);
   const reportedSet = new Set(reported);
   const missing = [...requested].filter((id) => !reportedSet.has(id));

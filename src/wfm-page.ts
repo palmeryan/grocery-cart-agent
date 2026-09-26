@@ -19,6 +19,10 @@ export interface AddCandidateResult {
   weighted: boolean;
 }
 
+export function parseSelectedPackSize(text: string): string | null {
+  return /Select Size:\s*(\d+(?:\.\d+)?\s*(?:Pounds?|lbs?|Ounces?|oz|kg|g)(?:\s*\(Pack of \d+\))?)/i.exec(text)?.[1] ?? null;
+}
+
 export class WfmPageError extends Error {
   constructor(message: string) {
     super(message);
@@ -54,27 +58,14 @@ function cardLocators(page: Page): Locator {
 
 /** Search the current WFM search page and wait for cards or an empty-result message. */
 export async function searchProducts(page: Page, query: string): Promise<ProductCandidate[]> {
-  ensureWfmPage(page, true);
-  const input = page.getByRole("combobox", { name: "Search" }).first();
-  if (await input.count() === 0) {
-    throw new UnknownControlError("Whole Foods search textbox was not found");
-  }
-  await input.fill(query);
+  ensureWfmPage(page);
   const expected = new URL(SEARCH_URL);
   expected.searchParams.set("k", query);
-  await input.press("Enter");
-  // WFM updates `k` during the search navigation. Waiting for that transition
-  // prevents an already-rendered result card from being returned for a new
-  // query. If the transition does not occur, fail rather than return stale
-  // results from the preceding search.
-  await page.waitForURL(
-    (url) => url.hostname.endsWith("wholefoodsmarket.com") &&
-      url.pathname.startsWith("/grocery/search") &&
-      url.searchParams.get("k") === expected.searchParams.get("k"),
-    { timeout: 10_000 },
-  );
-  await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-  ensureWfmPage(page);
+  await page.goto(expected.toString(), { waitUntil: "domcontentloaded" });
+  ensureWfmPage(page, true);
+  if (new URL(page.url()).searchParams.get("k") !== query) {
+    throw new WfmPageError(`Whole Foods search opened the wrong query: ${page.url()}`);
+  }
   await page.waitForFunction(
     (searchQuery) => {
       const body = document.body.innerText.toLowerCase();
@@ -167,7 +158,7 @@ export async function addCandidate(
   candidate: ProductCandidate | string,
   quantity = 1,
   option?: string,
-  chooseWeightedQuantity?: (options: readonly QuantityOption[]) => Promise<number>,
+  chooseWeightedQuantity?: (options: readonly QuantityOption[], selectedPackSize: string | null) => Promise<number>,
 ): Promise<AddCandidateResult> {
   ensureWfmPage(page, true);
   const id = typeof candidate === "string" ? candidate : candidate.id;
@@ -204,7 +195,19 @@ export async function addCandidate(
       if (Number.isSafeInteger(count) && count > 0) options.push({ quantity: count, label });
     }
     if (options.length === 0) throw new UnknownControlError(`No readable weighted quantity options for candidate ${id}`);
-    const selected = await chooseWeightedQuantity(options);
+    const productUrl = await card.locator('a[href*="/grocery/product/"]').first().getAttribute("href");
+    let selectedPackSize: string | null = null;
+    if (productUrl) {
+      const details = await page.context().newPage();
+      try {
+        await details.goto(new URL(productUrl, page.url()).toString(), { waitUntil: "domcontentloaded" });
+        await details.getByText(/Select Size:/i).first().waitFor({ timeout: 5_000 }).catch(() => undefined);
+        selectedPackSize = parseSelectedPackSize(await details.locator("body").innerText());
+      } finally {
+        await details.close();
+      }
+    }
+    const selected = await chooseWeightedQuantity(options, selectedPackSize);
     const selectedOption = options.find(({ quantity: count }) => count === selected);
     if (!selectedOption) throw new UnknownControlError(`Unlisted weighted quantity ${selected} for candidate ${id}`);
     await chooser.getByRole("option", { name: selectedOption.label, exact: true }).click();

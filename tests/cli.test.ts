@@ -39,6 +39,13 @@ describe("cart CLI", () => {
     expect(parseCommand(["attachment-check"])).toEqual({ command: "attachment-check" });
   });
 
+  it("parses the ingredients-only command", () => {
+    expect(parseCommand(["ingredients", "one.md", "two.md"])).toEqual({
+      command: "ingredients", recipePaths: ["one.md", "two.md"],
+    });
+    expect(parseCommand(["ingredients", "one.md", "--effort", "low"])).toBeNull();
+  });
+
   it("installs and removes signal handlers around a run", async () => {
     const events: string[] = [];
     const fakeProcess = {

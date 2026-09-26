@@ -3,8 +3,6 @@ import type {
   DecisionPriority,
   CompilationDecision,
   CompiledRecipe,
-  PantryDisposition,
-  PantryStatus,
   PurchaseIntent,
   PurchaseIntentSource,
   PurchaseIntentSourceRef,
@@ -14,6 +12,7 @@ import type {
   RecipeIngredientQuantity,
   RecipeIngredientUnresolved,
   RecipeCompilation,
+  ShoppingQuantity,
   ShoppingList,
 } from "./types.js";
 
@@ -25,7 +24,6 @@ export interface RecipeIngredientDraft {
   preparation: string | null;
   context: string | null;
   optional: boolean;
-  pantryStatus: PantryStatus;
   alternatives: RecipeIngredientAlternative[];
   unresolved: RecipeIngredientUnresolved[];
 }
@@ -38,16 +36,6 @@ export interface IngredientsAgentRecipe {
 export interface IngredientsAgentOutput {
   recipes: IngredientsAgentRecipe[];
 }
-
-export interface ShoppingListCompileOptions {
-  includeOptional?: boolean;
-  assumePantry?: boolean;
-}
-
-const DEFAULT_OPTIONS: Required<ShoppingListCompileOptions> = {
-  includeOptional: false,
-  assumePantry: true,
-};
 
 const compact = (value: string): string => value.replace(/\s+/g, " ").trim();
 const keyOf = (value: string): string => compact(value).normalize("NFKC").toLocaleLowerCase();
@@ -63,7 +51,7 @@ const normalizedItemKey = (value: string): string => {
 const unitAliases: Record<string, string> = {
   clove: "clove", cloves: "clove", ounce: "oz", ounces: "oz",
   pound: "lb", pounds: "lb", tablespoon: "tbsp", tablespoons: "tbsp",
-  teaspoon: "tsp", teaspoons: "tsp",
+  teaspoon: "tsp", teaspoons: "tsp", tomatoes: "tomato",
 };
 
 const canonicalUnit = (unit: string): string => {
@@ -84,45 +72,44 @@ const quantityForOutput = (quantity: RecipeIngredientQuantity): RecipeIngredient
   };
 };
 
-const amountForOutput = (amount: RecipeIngredientAmount): RecipeIngredientAmount => ({
-  raw: amount.raw,
-  sourceQuantity: amount.sourceQuantity === null ? null : quantityForOutput(amount.sourceQuantity),
-  additiveQuantity: amount.additiveQuantity === null ? null : quantityForOutput(amount.additiveQuantity),
-});
+const exactQuantityForOutput = (quantity: ShoppingQuantity): ShoppingQuantity => {
+  if (quantity.quantity <= 0) throw new Error("Shopping quantities must be positive");
+  return { quantity: quantity.quantity, unit: compact(quantity.unit), approximate: quantity.approximate };
+};
 
-const combineQuantities = (
-  quantities: readonly (RecipeIngredientQuantity | null)[],
-): RecipeIngredientQuantity | null => {
-  if (quantities.length === 0 || quantities.some((quantity) => quantity === null)) return null;
-  const present = quantities as RecipeIngredientQuantity[];
-  const units = present.map(({ unit }) => canonicalUnit(unit));
-  if (!units.every((unit) => unit === units[0])) return null;
-  const quantity = present.reduce((sum, value) => sum + value.quantity, 0);
-  const hasRange = present.some(({ quantityMax }) => quantityMax !== null);
+const amountForOutput = (amount: RecipeIngredientAmount): RecipeIngredientAmount => {
+  const sizedPackage = /\b\d+(?:\.\d+)?\s*-?\s*(?:g|kg|oz|ounces?|lb|pounds?)\b/i.test(amount.raw) &&
+    /\b(?:cans?|bags?|jars?|bottles?|cartons?|boxes?)\b/i.test(amount.raw);
+  const genericPackage = /^(?:cans?|bags?|jars?|bottles?|cartons?|boxes?)$/i;
+  if (sizedPackage && (!amount.sourceQuantity || genericPackage.test(amount.sourceQuantity.unit) ||
+      genericPackage.test(amount.additiveQuantity.unit))) {
+    throw new Error(`Package size omitted from ingredient quantity: ${amount.raw}`);
+  }
   return {
-    quantity,
-    quantityMax: hasRange
-      ? present.reduce((sum, value) => sum + (value.quantityMax ?? value.quantity), 0)
-      : null,
-    unit: units[0] ?? "",
-    approximate: present.some(({ approximate }) => approximate),
+    raw: amount.raw,
+    sourceQuantity: amount.sourceQuantity === null ? null : quantityForOutput(amount.sourceQuantity),
+    additiveQuantity: exactQuantityForOutput(amount.additiveQuantity),
   };
 };
 
-const lineDisposition = (
-  ingredient: RecipeIngredientDraft,
-  options: Required<ShoppingListCompileOptions>,
-): PantryDisposition => {
-  if (ingredient.optional && !options.includeOptional) return "omit_optional";
-  if (ingredient.pantryStatus === "assume_pantry" && options.assumePantry) return "assume_pantry";
-  return "buy";
+const combineQuantities = (
+  quantities: readonly ShoppingQuantity[],
+): ShoppingQuantity => {
+  if (quantities.length === 0) throw new Error("Shopping quantity is missing");
+  const units = quantities.map(({ unit }) => canonicalUnit(unit));
+  if (!units.every((unit) => unit === units[0])) throw new Error(`Incompatible shopping units: ${units.join(", ")}`);
+  return {
+    quantity: quantities.reduce((sum, value) => sum + value.quantity, 0),
+    unit: /\d/.test(quantities[0]?.unit ?? "") ? compact(quantities[0]!.unit) : units[0] ?? "",
+    approximate: quantities.some(({ approximate }) => approximate),
+  };
 };
 
-const intentDisposition = (lines: readonly RecipeIngredientLine[]): PantryDisposition => {
-  if (lines.some(({ disposition }) => disposition === "buy")) return "buy";
-  if (lines.some(({ disposition }) => disposition === "assume_pantry")) return "assume_pantry";
-  return "omit_optional";
-};
+const purchaseQuantity = (total: ShoppingQuantity): ShoppingQuantity =>
+  new Set(["lemon", "clove", "onion", "pita", "tomato", "cucumber", "can", "package", "bunch", "loaf", "bulb"])
+    .has(total.unit.split(" ").at(-1) ?? "")
+    ? { ...total, quantity: Math.ceil(total.quantity), approximate: false }
+    : total;
 
 const sourceRefFor = (
   sourceName: string,
@@ -153,7 +140,7 @@ const uniqueSources = (sources: readonly PurchaseIntentSourceRef[]): PurchaseInt
 };
 
 const priorityFor = (code: CompilationDecision["code"]): DecisionPriority => {
-  if (code === "unresolved_interpretation" || code === "incompatible_amounts") return "high";
+  if (code === "unresolved_interpretation") return "high";
   if (code === "consolidated") return "medium";
   return "low";
 };
@@ -171,34 +158,6 @@ const decision = (
   purchaseIntentId,
 });
 
-const formatQuantity = (value: RecipeIngredientQuantity): string => {
-  const amount = value.quantityMax === null
-    ? `${value.quantity}`
-    : `${value.quantity}-${value.quantityMax}`;
-  return `${value.approximate ? "about " : ""}${amount} ${canonicalUnit(value.unit)}`;
-};
-
-const guidanceFor = (
-  name: string,
-  buyLines: readonly RecipeIngredientLine[],
-  additiveAmount: RecipeIngredientQuantity | null,
-): string => {
-  if (buyLines.length > 1) {
-    return additiveAmount === null
-      ? "Buy enough to satisfy each preserved source amount."
-      : `Buy enough to satisfy ${formatQuantity(additiveAmount)} of ${name}.`;
-  }
-  const amount = buyLines[0]?.amount;
-  if (amount?.raw) {
-    const rawIdentity = normalizedItemKey(amount.raw);
-    const nameIdentity = normalizedItemKey(name);
-    const alreadyNamesItem = ` ${rawIdentity} `.includes(` ${nameIdentity} `);
-    return `Buy enough to satisfy ${amount.raw}${alreadyNamesItem ? "" : ` of ${name}`}.`;
-  }
-  if (additiveAmount) return `Buy enough to satisfy ${formatQuantity(additiveAmount)} of ${name}.`;
-  return `Choose a reasonable package of ${name}.`;
-};
-
 interface CompiledLine {
   recipe: CompiledRecipe;
   line: RecipeIngredientLine;
@@ -207,9 +166,7 @@ interface CompiledLine {
 /** Deterministically turn semantic extraction into the cart-facing plan. */
 export function compileRecipeCompilation(
   draft: IngredientsAgentOutput,
-  suppliedOptions: ShoppingListCompileOptions = {},
 ): RecipeCompilation {
-  const options = { ...DEFAULT_OPTIONS, ...suppliedOptions };
   if (draft.recipes.length === 0) throw new Error("Meal plan must contain at least one recipe");
 
   const sourceNames = new Set<string>();
@@ -244,7 +201,6 @@ export function compileRecipeCompilation(
           preparation: ingredient.preparation === null ? null : compact(ingredient.preparation),
           context: ingredient.context === null ? null : compact(ingredient.context),
           optional: ingredient.optional,
-          pantryStatus: ingredient.pantryStatus,
           alternatives: ingredient.alternatives.map((alternative) => ({
             name: compact(alternative.name),
             guidance: compact(alternative.guidance),
@@ -253,7 +209,6 @@ export function compileRecipeCompilation(
             priority,
             message: compact(message),
           })),
-          disposition: lineDisposition(ingredient, options),
           purchaseIntentId: "pending",
         };
       }),
@@ -279,13 +234,11 @@ export function compileRecipeCompilation(
     const intentId = stableIntentId(refs);
     for (const { line } of group) line.purchaseIntentId = intentId;
 
-    const buyLines = group.map(({ line }) => line).filter(({ disposition }) => disposition === "buy");
+    const buyLines = group.map(({ line }) => line);
     const additiveAmount = combineQuantities(buyLines.map(({ amount }) => amount.additiveQuantity));
-    const disposition = intentDisposition(group.map(({ line }) => line));
     const sourceLines: PurchaseIntentSource[] = group.map(({ recipe, line }) => ({
       ...sourceRefFor(recipe.sourceName, line),
       context: line.context,
-      disposition: line.disposition,
     }));
     const alternatives = [
       ...new Set(group.flatMap(({ line }) => line.alternatives.map((value) => JSON.stringify(value)))),
@@ -293,62 +246,16 @@ export function compileRecipeCompilation(
 
     purchaseIntents.push({
       id: intentId,
-      primary: {
-        name: first.line.name,
-        guidance: disposition === "buy"
-          ? guidanceFor(first.line.name, buyLines, additiveAmount)
-          : disposition === "assume_pantry"
-            ? "No purchase; assumed to be in the pantry."
-            : "No purchase; optional ingredient omitted by policy.",
-      },
+      primary: { name: first.line.name },
       alternatives,
       sourceLines,
       sourceAmounts: group.map(({ line }) => amountForOutput(line.amount)),
       additiveAmount,
       optional: group.every(({ line }) => line.optional),
-      disposition,
     });
 
     if (group.length > 1) {
       decisions.push(decision("consolidated", `Combined ${group.length} recipe mentions of ${first.line.name}.`, refs, intentId));
-    }
-    if (buyLines.length > 1 && additiveAmount === null) {
-      const buyRefs = group
-        .filter(({ line }) => line.disposition === "buy")
-        .map(({ recipe, line }) => sourceRefFor(recipe.sourceName, line));
-      decisions.push(decision("incompatible_amounts", `Preserved separate source amounts for ${first.line.name}.`, buyRefs, intentId));
-    }
-    const pantryGroup = group.filter(({ line }) => line.disposition === "assume_pantry");
-    if (pantryGroup.length > 0) {
-      decisions.push(decision(
-        "pantry_assumption",
-        `Assumed ${first.line.name} is already in the pantry.`,
-        pantryGroup.map(({ recipe, line }) => sourceRefFor(recipe.sourceName, line)),
-        intentId,
-      ));
-    }
-    const optionalGroup = group.filter(({ line }) => line.disposition === "omit_optional");
-    if (optionalGroup.length > 0) {
-      decisions.push(decision(
-        "optional_omitted",
-        `Omitted optional ${first.line.name}.`,
-        optionalGroup.map(({ recipe, line }) => sourceRefFor(recipe.sourceName, line)),
-        intentId,
-      ));
-    }
-    const uncertainPantryGroup = group.filter(
-      ({ line }) => line.pantryStatus === "uncertain" && line.disposition === "buy",
-    );
-    if (uncertainPantryGroup.length > 0) {
-      decisions.push({
-        ...decision(
-          "unresolved_interpretation",
-          `Pantry status for ${first.line.name} is uncertain; kept it on the buy list.`,
-          uncertainPantryGroup.map(({ recipe, line }) => sourceRefFor(recipe.sourceName, line)),
-          intentId,
-        ),
-        priority: "high",
-      });
     }
     for (const { recipe, line } of group) {
       for (const entry of line.unresolved) {
@@ -361,7 +268,7 @@ export function compileRecipeCompilation(
   }
 
   const plan: RecipeCompilation = {
-    contractVersion: 3,
+    contractVersion: 6,
     recipes: compiledRecipes,
     purchaseIntents,
     decisionLog: decisions,
@@ -372,7 +279,7 @@ export function compileRecipeCompilation(
 
 /** Validate cross-reference invariants that JSON Schema cannot express. */
 export function assertRecipeCompilationIntegrity(plan: RecipeCompilation): void {
-  if (plan.contractVersion !== 3) throw new Error(`Unsupported recipe-compilation contract version: ${plan.contractVersion}`);
+  if (plan.contractVersion !== 6) throw new Error(`Unsupported recipe-compilation contract version: ${plan.contractVersion}`);
   const sourceNames = new Set<string>();
   const lines = new Map<string, RecipeIngredientLine>();
   for (const recipe of plan.recipes) {
@@ -394,7 +301,7 @@ export function assertRecipeCompilationIntegrity(plan: RecipeCompilation): void 
     for (const source of intent.sourceLines) {
       const line = lines.get(sourceRefKey(source));
       if (!line || line.sourceText !== source.sourceText || line.context !== source.context ||
-          line.disposition !== source.disposition || line.purchaseIntentId !== intent.id) {
+          line.purchaseIntentId !== intent.id) {
         throw new Error(`Purchase intent ${intent.id} has an invalid source reference`);
       }
     }
@@ -420,22 +327,25 @@ const compactContext = (values: readonly (string | null)[]): string | undefined 
 /** Convert source-preserving recipe compilation into the cart harness input. */
 export function recipeCompilationToShoppingList(
   compilation: RecipeCompilation,
+  sourceRecipes: readonly { sourceName: string; text: string }[],
 ): ShoppingList {
   assertRecipeCompilationIntegrity(compilation);
+  if (JSON.stringify(sourceRecipes.map(({ sourceName }) => sourceName).sort()) !==
+      JSON.stringify(compilation.recipes.map(({ sourceName }) => sourceName).sort())) {
+    throw new Error("Shopping list source recipes do not match the compilation");
+  }
   const ingredients = compilation.purchaseIntents
-    .filter(({ disposition }) => disposition === "buy")
     .map((intent) => {
-      const preferences = [
-        `Preferred product identity: ${intent.primary.name}`,
-        ...intent.alternatives.map(({ name, guidance }) =>
-          `Acceptable alternative: ${name}. ${guidance}`,
-        ),
-      ];
       const context = compactContext(intent.sourceLines.map(({ context }) => context));
       return {
         id: intent.id,
-        request: intent.primary.guidance,
-        preferences,
+        request: intent.primary.name,
+        purchaseRequirement: {
+          total: purchaseQuantity(intent.additiveAmount),
+          optional: intent.optional,
+          alternatives: intent.alternatives,
+          sources: [...new Set(intent.sourceLines.map(({ sourceName }) => sourceName))],
+        },
         ...(context ? { context } : {}),
       };
     });
@@ -443,19 +353,7 @@ export function recipeCompilationToShoppingList(
     throw new Error("Ingredients Agent produced no items for the shopping list");
   }
   return {
-    recipes: [{
-      id: "ingredients-agent-list",
-      name: "Ingredients Agent shopping list",
-      servings: 1,
-      context: `Compiled from: ${compilation.recipes.map(({ sourceName }) => sourceName).join(", ")}`,
-      ingredients,
-    }],
+    sourceRecipes: sourceRecipes.map(({ sourceName, text }) => ({ sourceName, text })),
+    ingredients,
   };
-}
-
-export function compileShoppingList(
-  draft: IngredientsAgentOutput,
-  options: ShoppingListCompileOptions = {},
-): ShoppingList {
-  return recipeCompilationToShoppingList(compileRecipeCompilation(draft, options));
 }

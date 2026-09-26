@@ -4,15 +4,35 @@
   "description": "A prebuilt shopping list accepted directly by the Cart Agent path.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["recipes"],
+  "oneOf": [
+    { "required": ["ingredients"], "properties": { "ingredients": true } },
+    { "required": ["recipes"], "properties": { "recipes": true } }
+  ],
   "properties": {
+    "ingredients": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/ingredient" }
+    },
+    "sourceRecipes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sourceName", "text"],
+        "properties": {
+          "sourceName": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "recipes": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name", "servings", "context", "ingredients"],
+        "required": ["id", "name", "context", "ingredients"],
         "properties": {
           "id": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9-]+$" },
           "name": { "type": "string", "minLength": 1 },
@@ -21,27 +41,61 @@
           "ingredients": {
             "type": "array",
             "minItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["id", "request"],
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "^[a-z0-9-]+$"
-                },
-                "request": { "type": "string", "minLength": 3 },
-                "preferences": {
-                  "type": "array",
-                  "uniqueItems": true,
-                  "items": { "type": "string", "minLength": 1 }
-                },
-                "context": { "type": "string", "minLength": 1 }
-              }
+            "items": { "$ref": "#/$defs/ingredient" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ingredient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "request"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9-]+$" },
+        "request": { "type": "string", "minLength": 3 },
+        "preferences": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "context": { "type": "string", "minLength": 1 },
+        "purchaseRequirement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "optional", "alternatives", "sources"],
+          "properties": {
+            "total": { "$ref": "#/$defs/quantity" },
+            "optional": { "type": "boolean" },
+            "alternatives": { "type": "array", "items": { "$ref": "#/$defs/alternative" } },
+            "sources": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
             }
           }
         }
+      }
+    },
+    "quantity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quantity", "unit", "approximate"],
+      "properties": {
+        "quantity": { "type": "number", "exclusiveMinimum": 0 },
+        "unit": { "type": "string", "minLength": 1 },
+        "approximate": { "type": "boolean" }
+      }
+    },
+    "alternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "guidance"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "guidance": { "type": "string", "minLength": 1 }
       }
     }
   }

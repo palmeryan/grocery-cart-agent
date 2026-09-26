@@ -10,13 +10,7 @@ import type {
 } from "../src/types.js";
 
 const request: ShoppingList = {
-  recipes: [{
-    id: "recipe",
-    name: "Test recipe",
-    servings: 2,
-    context: "Test context",
-    ingredients: [{ id: "apples", request: "2 apples" }],
-  }],
+  ingredients: [{ id: "apples", request: "2 apples" }],
 };
 
 const preflight: AuthReport = {

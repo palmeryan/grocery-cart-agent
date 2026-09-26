@@ -157,6 +157,26 @@ describe("parseCartNetworkSnapshot", () => {
     observer.dispose();
   });
 
+  it("reports a WFM rejection for the selected ASIN instead of a generic timeout", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    await observer.beginMutation([{ asin: "CHICKEN", quantity: 1 }]);
+    events.emit("response", {
+      url: () => "https://www.wholefoodsmarket.com/api/wwos/cart",
+      request: () => ({ method: () => "POST" }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{
+        items: [{ asin: "CHICKEN", quantity: 1 }],
+        status: [{ statusCode: "1", errorMessage: "itemRemovedRegionMismatch",
+          itemData: JSON.stringify({ ASIN: "BROCCOLI" }) }],
+      }] }),
+    } as unknown as Response);
+    await expect(observer.waitForMutation({ asin: "BROCCOLI", expectedQuantity: 1, timeoutMs: 500 }))
+      .resolves.toMatchObject({ status: "rejected", delta: 0,
+        diagnostic: "Whole Foods rejected BROCCOLI: itemRemovedRegionMismatch (statusCode 1)." });
+    observer.dispose();
+  });
+
   it("does not consume a response that arrived before the mutation boundary", async () => {
     const events = new EventEmitter();
     const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);

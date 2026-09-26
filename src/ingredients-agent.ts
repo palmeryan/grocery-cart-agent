@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import {
   compileRecipeCompilation,
   recipeCompilationToShoppingList,
-  type ShoppingListCompileOptions,
   type IngredientsAgentOutput,
 } from "./shopping-list-compiler.js";
 import { renderIngredientsAgentPrompt } from "./prompt.js";
@@ -38,7 +37,6 @@ export interface RunIngredientsAgentInput {
   stderrPath: string;
   timeoutMs: number;
   documents: readonly RecipeDocument[];
-  options?: ShoppingListCompileOptions;
   signal?: AbortSignal;
 }
 
@@ -96,22 +94,21 @@ export async function runIngredientsAgent(
   }
   const draft = parseIngredientsAgentOutput(readFileSync(input.outputPath, "utf8"));
   assertDraftMatchesDocuments(draft, input.documents);
-  const recipeCompilation = compileRecipeCompilation(draft, input.options);
+  const recipeCompilation = compileRecipeCompilation(draft);
   return {
-    shoppingList: recipeCompilationToShoppingList(recipeCompilation),
+    shoppingList: recipeCompilationToShoppingList(recipeCompilation, input.documents),
     recipeCompilation,
     codex,
   };
 }
 
 /**
- * Run the semantic recipe-reading step, then keep grouping, policy, and
+ * Run the semantic recipe-reading step, then keep grouping and
  * cross-reference checks deterministic and local.
  */
 export async function compileIngredientsList(
   documents: readonly RecipeDocument[],
   invokeCompiler: InvokeIngredientsAgent,
-  options: ShoppingListCompileOptions = {},
   signal = new AbortController().signal,
 ): Promise<ShoppingList> {
   if (documents.length === 0) {
@@ -124,5 +121,5 @@ export async function compileIngredientsList(
   const draft = await invokeCompiler({ prompt, documents, signal });
   if (signal.aborted) throw new Error("Ingredients Agent run was aborted");
   assertDraftMatchesDocuments(draft, documents);
-  return recipeCompilationToShoppingList(compileRecipeCompilation(draft, options));
+  return recipeCompilationToShoppingList(compileRecipeCompilation(draft), documents);
 }

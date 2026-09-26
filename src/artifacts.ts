@@ -2,6 +2,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  mkdirSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -33,6 +34,7 @@ export function createRunPaths(
 ): RunPaths {
   const runId = now.toISOString().replaceAll(":", "-").replace(".", "-");
   const runDir = join(rootDir, "runs", runId);
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
   // Browser interaction is harness-owned; no model browser output tree.
   return {
     kind,
