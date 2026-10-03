@@ -1,8 +1,9 @@
-import { cpSync, existsSync, readdirSync, readFileSync, mkdtempSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseCommand, runCli, withCliSignalHandlers } from "../src/cli.js";
+import type { runIngredientsAgent } from "../src/ingredients-agent.js";
 import type { AuthReport } from "../src/types.js";
 
 const fixture = (name: string): string => new URL(`fixtures/${name}`, import.meta.url).pathname;
@@ -44,6 +45,113 @@ describe("cart CLI", () => {
       command: "ingredients", recipePaths: ["one.md", "two.md"],
     });
     expect(parseCommand(["ingredients", "one.md", "--effort", "low"])).toBeNull();
+  });
+
+  it("parses the mandatory-review end-to-end command and rejects the old bypass route", () => {
+    expect(parseCommand(["shopper-helper", "one.md", "two.md"])).toEqual({
+      command: "shopper-helper", recipePaths: ["one.md", "two.md"],
+    });
+    expect(parseCommand(["shopper-helper"])).toEqual({ command: "shopper-helper", recipePaths: [] });
+    expect(parseCommand(["build-recipes", "one.md", "--review"])).toBeNull();
+    expect(parseCommand(["shopper-helper", "one.md", "--skip-review"])).toBeNull();
+    expect(parseCommand(["ingredients", "one.md", "--review"])).toBeNull();
+    expect(parseCommand(["ingredients-review", "list.json", "--output", "reviewed.json"])).toEqual({
+      command: "ingredients-review", shoppingListPath: "list.json", outputPath: "reviewed.json",
+    });
+  });
+
+  it("feeds interactively entered recipes into Ingredients Agent and exits before it on cancel", async () => {
+    const { root } = setup();
+    const documents = [{ sourceName: "Pasta", text: "Pasta\n\n2 cups tomatoes" }];
+    let received: unknown;
+    let browserLaunched = false;
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const cancelled = await runCli(["shopper-helper"], {
+      rootDir: root, env: env(root),
+      enterRecipes: async () => null,
+      runIngredients: async () => { throw new Error("Ingredients Agent must not start after cancel"); },
+      launchBrowser: async () => { browserLaunched = true; throw new Error("Browser must not launch"); },
+    });
+    expect(cancelled).toBe(0);
+    expect(existsSync(join(root, "runs"))).toBe(false);
+    const exitCode = await runCli(["shopper-helper"], {
+      rootDir: root, env: env(root),
+      enterRecipes: async () => documents,
+      runIngredients: async (input) => {
+        received = input.documents;
+        return { shoppingList: { ingredients: [{ id: "tomatoes", request: "Tomatoes" }] }, recipeCompilation: {} } as Awaited<ReturnType<typeof runIngredientsAgent>>;
+      },
+      reviewShoppingList: async () => null,
+      launchBrowser: async () => { browserLaunched = true; throw new Error("Browser must not launch after cancelled review"); },
+    });
+    output.mockRestore();
+    expect(exitCode).toBe(0);
+    expect(received).toEqual(documents);
+    expect(browserLaunched).toBe(false);
+  });
+
+  it("saves an empty shopper-helper review and never launches the cart", async () => {
+    const { root } = setup();
+    const recipePath = join(root, "recipe.md");
+    writeFileSync(recipePath, "Chicken thighs\n");
+    let browserLaunched = false;
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const exitCode = await runCli(["shopper-helper", recipePath], {
+      rootDir: root, env: env(root),
+      runIngredients: async () => ({
+        shoppingList: { ingredients: [{ id: "chicken", request: "Chicken thighs" }] }, recipeCompilation: {},
+      }) as Awaited<ReturnType<typeof runIngredientsAgent>>,
+      reviewShoppingList: async () => new Set(),
+      launchBrowser: async () => { browserLaunched = true; throw new Error("Unexpected browser launch"); },
+    });
+    expect(exitCode).toBe(0);
+    expect(output.mock.calls.map(([message]) => message)).toEqual(expect.arrayContaining([
+      "[progress] Reading 1 recipe with the Ingredients Agent",
+      "[progress] Ingredients ready: 1 shopping-list items",
+    ]));
+    output.mockRestore();
+    expect(browserLaunched).toBe(false);
+    const runDir = join(root, "runs", readdirSync(join(root, "runs"))[0]!);
+    expect(JSON.parse(readFileSync(join(runDir, "reviewed-shopping-list.json"), "utf8")).ingredients).toEqual([]);
+    expect(JSON.parse(readFileSync(join(runDir, "shopping-list.json"), "utf8")).ingredients.length).toBeGreaterThan(0);
+  });
+
+  it("passes only selected items into the cart path after shopper-helper review", async () => {
+    const { root } = setup();
+    const recipePath = join(root, "recipe.md");
+    writeFileSync(recipePath, "Apples and bread\n");
+    let launched = false;
+    await runCli(["shopper-helper", recipePath], {
+      rootDir: root, env: env(root),
+      runIngredients: async () => ({
+        shoppingList: { ingredients: [
+          { id: "apples", request: "Apples" }, { id: "bread", request: "Bread" },
+        ] }, recipeCompilation: {},
+      }) as Awaited<ReturnType<typeof runIngredientsAgent>>,
+      reviewShoppingList: async () => new Set(["bread"]),
+      reservePort: async () => 45678,
+      launchBrowser: async () => { launched = true; throw new Error("Expected stop after review"); },
+    });
+    expect(launched).toBe(true);
+    const runDir = join(root, "runs", readdirSync(join(root, "runs"))[0]!);
+    expect(JSON.parse(readFileSync(join(runDir, "reviewed-shopping-list.json"), "utf8")).ingredients)
+      .toEqual([{ id: "bread", request: "Bread" }]);
+  });
+
+  it("writes a filtered cart-ready shopping list from ingredients-review without launching Chrome", async () => {
+    const { root, request } = setup();
+    const outputPath = join(root, "reviewed.json");
+    let browserLaunched = false;
+    const exitCode = await runCli(["ingredients-review", request, "--output", outputPath], {
+      rootDir: root, env: env(root),
+      reviewShoppingList: async (list) => new Set([(list.ingredients ?? list.recipes.flatMap((recipe) => recipe.ingredients))[0]!.id]),
+      launchBrowser: async () => { browserLaunched = true; throw new Error("Unexpected browser launch"); },
+    });
+    expect(exitCode).toBe(0);
+    expect(browserLaunched).toBe(false);
+    expect(JSON.parse(readFileSync(outputPath, "utf8")).recipes).toHaveLength(1);
+    expect(JSON.parse(readFileSync(outputPath, "utf8")).recipes[0].context).toBe("Quick weeknight dish; boneless meat preferred");
+    expect(JSON.parse(readFileSync(request, "utf8")).recipes).toHaveLength(1);
   });
 
   it("installs and removes signal handlers around a run", async () => {

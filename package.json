@@ -9,8 +9,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "cart": "tsx src/cli.ts",
-    "cart-list": "tsx src/cli.ts build",
-    "cart-recipes": "tsx src/cli.ts build-recipes",
+    "cart-build": "tsx src/cli.ts build",
+    "shopper-helper": "tsx src/cli.ts shopper-helper",
+    "ingredients-review": "tsx src/cli.ts ingredients-review",
     "ingredients": "tsx src/cli.ts ingredients",
     "login": "bash scripts/open-profile.sh",
     "auth-check": "tsx src/cli.ts auth-check",
@@ -20,11 +21,13 @@
   },
   "dependencies": {
     "ajv": "8.20.0",
-    "playwright": "1.63.0-alpha-2026-08-31"
+    "playwright": "1.63.0-alpha-2026-08-31",
+    "terminal-kit": "^3.1.4"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.2",
+    "@types/terminal-kit": "^2.5.7",
     "eslint": "10.10.0",
     "tsx": "4.23.13",
     "typescript": "5.9.2",

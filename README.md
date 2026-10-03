@@ -1,13 +1,15 @@
 # Whole Foods Cart Builder
 
 Local cart runner using the Codex CLI and a Playwright/CDP harness. It exposes
-two paths that converge on the same validated **Shopping List**:
+four commands around the validated **Shopping List**:
 
-1. `cart-recipes`: recipe documents → **Ingredients Agent** → deterministic
-   compilation → Shopping List → harness-operated cart.
-2. `cart-list`: prebuilt Shopping List → harness-operated cart.
+1. `shopper-helper`: recipe documents → **Ingredients Agent** → deterministic
+   compilation → mandatory interactive review → harness-operated cart.
+2. `cart-build`: reviewed or prebuilt Shopping List → harness-operated cart.
 3. `ingredients`: recipe documents → **Ingredients Agent** → deterministic
    compilation, without opening Chrome or running the cart harness.
+4. `ingredients-review`: existing Shopping List → interactive review → a new
+   cart-ready Shopping List, without opening Chrome or starting the cart.
 
 The Ingredients Agent is the boundary for unstructured recipe input. It
 extracts source-preserving ingredient facts, consistent purchasable identities,
@@ -95,28 +97,50 @@ profile.
 6. After the auth check succeeds, choose one path:
 
 ```bash
-# Full E2E from one or more recipe documents
-npm run cart-recipes -- recipe-one.md recipe-two.md
+# Full E2E from one or more recipe documents, including mandatory review
+npm run shopper-helper -- monday-shawarma.md tuesday-braised-chicken-beans.md
+
+# Or paste recipes into the interactive terminal editor
+npm run shopper-helper
 
 # Direct harness path from a prebuilt Shopping List
-npm run cart-list -- path/to/shopping-list.json
+npm run cart-build -- path/to/shopping-list.json
 
 # Ingredients Agent and compiler only
-npm run ingredients -- recipe-one.md recipe-two.md
+npm run ingredients -- monday-shawarma.md tuesday-braised-chicken-beans.md
 
-# Example decision-model override (works with cart-list or cart-recipes)
-npm run cart-list -- path/to/shopping-list.json --model gpt-5.6-luna --effort medium
+# Review an existing list; output defaults to a unique runs/<run-id>/ folder
+npm run ingredients-review -- path/to/shopping-list.json
+
+# Choose a specific reviewed-list output path
+npm run ingredients-review -- path/to/shopping-list.json --output runs/this-week.json
+
+# Example decision-model override
+npm run cart-build -- path/to/shopping-list.json --model gpt-5.6-luna --effort medium
 ```
+
+With no recipe filenames, `shopper-helper` opens a terminal editor. Paste a
+recipe, choose **Add recipe** for another, then choose **Make shopping list**
+to continue through the Ingredients Agent, mandatory ingredient review, and
+cart flow. Press Escape to cancel. Recipe text stays in memory and is included
+in the normal run artifacts after compilation starts.
+
+Recipe and cart runs print the current step and a 15-second heartbeat while a
+step is still running. The heartbeat pauses while the shopping-list checklist
+is open so it does not overwrite the review screen.
 
 Accepted effort values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
 `max`, and `ultra`. The selected model may support only a subset; Codex reports
 an unsupported model/effort combination when the run starts.
 
 Shopping Lists validate against `schemas/shopping-list.schema.json`. A full
-recipe run saves its generated list as `runs/<run-id>/shopping-list.json` and its
+recipe run saves its reviewed list as `runs/<run-id>/reviewed-shopping-list.json`,
+along with its original generated list as `runs/<run-id>/shopping-list.json` and its
 source-preserving intermediate as `runs/<run-id>/recipe-compilation.json`.
 An ingredients-only run saves those same two compiled artifacts, plus the raw
 Ingredients Agent output under `runs/<run-id>/ingredients-agent/`.
+`ingredients-review` prints the path to its new cart-ready output; pass that
+path to `npm run cart-build -- <path>`.
 Both paths also write `runs/<run-id>/usage.json`, which rolls up every reported
 Ingredients Agent and cart-decision turn (including retries). It shows cached and
 uncached input, cache writes, output and reasoning tokens, cache rate, and a

@@ -62,7 +62,7 @@ the same owned Chrome profile and localhost CDP endpoint.
   dedicated Chrome window:
 
 ```bash
-npm run cart-list -- runs/three-item-smoke.json
+npm run cart-build -- runs/three-item-smoke.json
 ```
 
 - Stop immediately on checkout, payment, order, or account-setting pages. If
@@ -86,7 +86,7 @@ npm run cart-list -- runs/three-item-smoke.json
   from one or more small recipe documents:
 
 ```bash
-npm run cart-recipes -- recipe-one.md recipe-two.md
+npm run shopper-helper -- monday-shawarma.md tuesday-braised-chicken-beans.md
 ```
 
 - Confirm the run saves `shopping-list.json`,

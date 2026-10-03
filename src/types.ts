@@ -178,7 +178,7 @@ export interface CartReport {
 }
 
 export interface RunPaths {
-  kind: "build" | "build-recipes" | "ingredients" | "auth-check" | "attachment-check";
+  kind: "build" | "shopper-helper" | "ingredients" | "ingredients-review" | "auth-check" | "attachment-check";
   runId: string;
   runDir: string;
   shoppingListPath: string;
