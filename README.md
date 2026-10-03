@@ -1,5 +1,30 @@
 # Whole Foods Cart Builder
 
+Turn recipes into a reviewed shopping list and a Whole Foods delivery cart.
+This is an experimental local tool for macOS; supervise cart runs and review
+the final cart before checking out yourself.
+
+## Get started with Codex
+
+Open Codex on your Mac, paste the project link, and tell it to set up:
+
+> Set up https://github.com/palmeryan/whole-foods-cart on my machine.
+
+Codex handles downloading the project, checking and installing prerequisites,
+installing dependencies, and running setup checks. You complete any sign-in
+steps and choose your delivery address in the dedicated Whole Foods browser.
+When you're ready to shop, ask Codex to help you enter recipes and review the
+shopping list.
+
+**For the setup agent:** obtain the linked project's source in a writable local
+folder, then read [AGENTS.md](AGENTS.md) and follow its setup workflow. Reuse an
+existing checkout without overwriting local changes. A source archive works
+without Git. If the link is inaccessible, report that and ask for an accessible
+source link; do not substitute another project. Run setup on the user's Mac,
+where the browser and accounts will be used.
+
+## How it works
+
 Local cart runner using the Codex CLI and a Playwright/CDP harness. It exposes
 four commands around the validated **Shopping List**:
 
@@ -23,8 +48,10 @@ Generated lists place consolidated items in a top-level `ingredients` array.
 ## Current outcome
 
 The earlier dedicated-profile live smoke did not complete the cart workflow.
+Later local work included a recipe-to-cart run that needed manual repairs.
 Cart-matching acceptance runs (staples / ambiguous / substitutions, controlled
-rerun, later-day persistence) remain to be performed.
+rerun, later-day persistence) remain to be performed. Treat this as an
+experimental local tool and supervise cart runs.
 
 The CLI owns a dedicated Chrome profile. Both its diagnostics and the cart harness
 connect directly to that owned Chrome instance over localhost CDP. Readiness
@@ -59,6 +86,9 @@ contains run diagnostics and may include active browser-session details.
 
 ## Prerequisites
 
+Codex can install missing prerequisites during setup. These are the underlying
+requirements, not steps you need to complete before handing it the link.
+
 - macOS with Google Chrome
 - Node.js 22.16.0 or newer
 - Codex CLI 0.154.0 or newer, signed into the intended ChatGPT account
@@ -68,10 +98,13 @@ Ingredients Agent settings remain fixed for recipe compilation.
 
 All harness commands below run from the repository root.
 
-## Install
+## Manual setup
+
+If you prefer to run setup yourself, download and extract the source or clone
+the repository, then run these commands from the project folder:
 
 ```bash
-npm install
+npm ci
 npm test
 npm run typecheck
 npm run lint
@@ -85,7 +118,7 @@ profile.
 
 1. Run `npm run login`.
 2. Sign in to Whole Foods Market and confirm the account is in delivery mode
-   with Lamar as the store context.
+   with your own delivery address and its available store context.
 3. Close the dedicated Chrome window.
 4. Run `npm run cart -- attachment-check` to verify deterministic Chrome/CDP
    startup against Example Domain without opening the storefront.
@@ -187,3 +220,25 @@ rm .wfm-cart.lock
 Use `docs/manual-test-runbook.md` for the short live verification sequence.
 Do not remove a recovery lock until the repository-root inspect step shows no
 Chrome process on the dedicated profile.
+
+## Source downloads
+
+Run `npm run release:source` to create a source archive and SHA-256 checksum
+under `releases/`. The archive includes the current source files, including
+uncommitted changes, examples, recipes, tests, and dependency lockfile. It
+excludes Git history, browser profiles, run output, debug screenshots, and
+historical design notes. Build downloads with this command instead of zipping
+the working folder.
+
+The archive includes `AGENTS.md`, so Codex can continue setup after extraction.
+For manual setup, run `npm ci` from its top-level folder and follow the steps
+above. Each user signs in with their own Codex and Whole Foods accounts.
+Ingredients-only commands do not need Chrome or Whole Foods authentication.
+
+See [release preparation](docs/release-preparation.md) for packaging and
+verification.
+
+## License
+
+Project code is available under the [MIT License](LICENSE). Third-party
+dependencies and recipe content retain their respective terms.

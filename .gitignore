@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
 .DS_Store
 runs/
 .wfm-cart.lock
@@ -8,3 +10,8 @@ playwright-profile/
 *.log
 .worktrees/
 .superpowers/
+.playwright-mcp/
+chrome-profile/
+auth-state.png
+*.har
+releases/

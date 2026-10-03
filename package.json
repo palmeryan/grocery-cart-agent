@@ -1,6 +1,7 @@
 {
   "name": "whole-foods-cart",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "release:source": "bash scripts/release-source.sh",
     "cart": "tsx src/cli.ts",
     "cart-build": "tsx src/cli.ts build",
     "shopper-helper": "tsx src/cli.ts shopper-helper",
