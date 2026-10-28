@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')"
-bundle="whole-foods-cart-$version"
+bundle="grocery-cart-agent-$version"
 stage="$(mktemp -d "${TMPDIR:-/tmp}/wfm-release.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/$bundle" releases

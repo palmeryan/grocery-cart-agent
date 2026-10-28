@@ -1,4 +1,4 @@
-# Working with Whole Foods Cart Builder
+# Working with Grocery Cart Agent
 
 When the user asks to set up this project, carry out the workflow below on their
 Mac. Handle commands and troubleshooting; involve the user for account login,

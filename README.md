@@ -1,4 +1,4 @@
-# Whole Foods Cart Builder
+# Grocery Cart Agent
 
 Turn recipes into a reviewed shopping list and a Whole Foods delivery cart.
 This is an experimental local tool for macOS; supervise cart runs and review
@@ -8,7 +8,7 @@ the final cart before checking out yourself.
 
 Open Codex on your Mac, paste the project link, and tell it to set up:
 
-> Set up https://github.com/palmeryan/whole-foods-cart on my machine.
+> Set up https://github.com/palmeryan/grocery-cart-agent on my machine.
 
 Codex handles downloading the project, checking and installing prerequisites,
 installing dependencies, and running setup checks. You complete any sign-in

@@ -8,7 +8,7 @@ public release has been reviewed.
 
 1. Run `npm test`, `npm run typecheck`, `npm run lint`, and `npm run build`.
 2. Run `npm run release:source`.
-3. Inspect the archive with `tar -tzf releases/whole-foods-cart-0.1.0.tar.gz`.
+3. Inspect the archive with `tar -tzf releases/grocery-cart-agent-0.1.0.tar.gz`.
 4. Extract it into a fresh folder and run `npm ci`, then repeat the checks.
 5. Follow `manual-test-runbook.md` for a supervised live smoke with your own
    accounts. Offline checks do not establish live cart reliability.
