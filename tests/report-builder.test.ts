@@ -16,10 +16,7 @@ const request: ShoppingList = {
 const preflight: AuthReport = {
   runStatus: "completed",
   authenticated: true,
-  deliveryModeConfirmed: true,
   wholeFoodsStorefrontConfirmed: true,
-  checkoutVisited: false,
-  settingsChanged: false,
   failureReason: null,
 };
 
@@ -62,6 +59,31 @@ describe("report builder", () => {
       { productName: "Organic Apples", productId: "B000000001", quantity: 1 },
     ]);
     expect(report.failureReason).toBeNull();
+  });
+
+  it("does not count one added unit as two separate additions", () => {
+    const report = buildCartReport({
+      request,
+      requestSha256: "a".repeat(64),
+      preflight,
+      baseline: inspection("Your cart is empty"),
+      final: inspection("Organic Apples", 1),
+      results: [item(), { ...item(), ingredientId: "more-apples" }],
+    });
+    expect(report.verificationStatus).toBe("inconclusive");
+    expect(report.verificationNotes).toHaveLength(1);
+  });
+
+  it("confirms separate additions when their combined quantity is present", () => {
+    const report = buildCartReport({
+      request,
+      requestSha256: "a".repeat(64),
+      preflight,
+      baseline: inspection("Your cart is empty"),
+      final: inspection("Organic Apples", 2),
+      results: [item(), { ...item(), ingredientId: "more-apples" }],
+    });
+    expect(report.verificationStatus).toBe("confirmed");
   });
 
   it("matches a cart title that includes the separately reported package size", () => {

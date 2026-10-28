@@ -17,8 +17,8 @@ const env = (root: string): NodeJS.ProcessEnv => ({
   HOME: root, CHROME_EXECUTABLE: "/usr/bin/true", WFM_MAX_RUN_MS: "60000",
 });
 const auth = (): AuthReport => ({
-  runStatus: "completed", authenticated: true, deliveryModeConfirmed: true,
-  wholeFoodsStorefrontConfirmed: true, checkoutVisited: false, settingsChanged: false,
+  runStatus: "completed", authenticated: true,
+  wholeFoodsStorefrontConfirmed: true,
   failureReason: null,
 });
 const inspection = (items: { productName: string; productId?: string; quantity: number }[]) => ({

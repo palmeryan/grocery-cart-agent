@@ -1,4 +1,5 @@
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
@@ -21,10 +22,12 @@ export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export interface CodexInvocation {
   args: string[];
+  workDir: string;
 }
 
 export interface IngredientsAgentInvocationInput {
   rootDir: string;
+  workDir?: string;
   outputPath: string;
   schemaPath: string;
 }
@@ -37,6 +40,7 @@ export interface CodexResult {
 
 export interface RunCodexInput {
   executable: string;
+  workDir?: string;
   args: string[];
   prompt: string;
   eventsPath: string;
@@ -52,34 +56,79 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 const POST_KILL_REAP_MS = 1_000;
 const REAP_POLL_MS = 25;
 
-/** Build a read-only Ingredients Agent invocation for recipe interpretation without MCP. */
-export function buildIngredientsAgentInvocation(
-  input: IngredientsAgentInvocationInput,
+/** CLI version used for isolation verification; other versions warn, not fail. */
+export const TESTED_CODEX_VERSION = "0.160.0";
+
+// Each of these features can expose tools or discover/install additional tools.
+const DISABLED_MODEL_FEATURES = [
+  "shell_tool", "unified_exec", "shell_snapshot", "apps", "plugins", "multi_agent",
+  "browser_use", "browser_use_external", "computer_use", "hooks", "image_generation",
+  "view_image", "code_mode", "code_mode_host", "remote_plugin", "skill_search",
+  "skill_mcp_dependency_install", "workspace_dependencies",
+] as const;
+
+/** Forward existing values only; never inherit unrelated application secrets. */
+export function codexEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const allowed = [
+    "PATH", "HOME", "CODEX_HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
+    "OPENAI_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+  ];
+  return Object.fromEntries(allowed.filter((key) => env[key] !== undefined)
+    .map((key) => [key, env[key]]));
+}
+
+export function buildRestrictedCodexInvocation(
+  input: IngredientsAgentInvocationInput & { model: string; reasoningEffort: ReasoningEffort },
 ): CodexInvocation {
+  const outputPath = resolve(input.rootDir, input.outputPath);
+  const workDir = resolve(input.workDir ?? join(dirname(outputPath), "model-work"));
+  const settings = [
+    'default_permissions="wfm-model"',
+    'permissions.wfm-model.extends=":read-only"',
+    'permissions.wfm-model.filesystem={ ":root"="deny", ":minimal"="read", ":tmpdir"="deny", ":slash_tmp"="deny", "/private/tmp"="deny" }',
+    'permissions.wfm-model.network.enabled=false',
+    'approval_policy="never"',
+    'web_search="disabled"',
+    'project_doc_max_bytes=0',
+    'shell_environment_policy.inherit="none"',
+    ...DISABLED_MODEL_FEATURES.map((feature) => `features.${feature}=false`),
+  ];
   return {
+    workDir,
     args: [
-      "exec",
-      "--model",
-      INGREDIENTS_AGENT_MODEL,
-      "-c",
-      `model_reasoning_effort="${INGREDIENTS_AGENT_REASONING_EFFORT}"`,
-      "--ignore-user-config",
-      "--strict-config",
-      "--ephemeral",
-      "--sandbox",
-      "read-only",
-      "--json",
-      "--output-schema",
-      input.schemaPath,
-      "--output-last-message",
-      input.outputPath,
-      "--cd",
-      input.rootDir,
-      "-c",
-      'approval_policy="never"',
-      "-",
+      "--no-daemon", "exec", "--model", input.model,
+      "-c", `model_reasoning_effort=${JSON.stringify(input.reasoningEffort)}`,
+      "--ignore-user-config", "--ignore-rules", "--strict-config", "--ephemeral",
+      "--skip-git-repo-check", "--json",
+      "--output-schema", resolve(input.rootDir, input.schemaPath),
+      "--output-last-message", outputPath, "--cd", workDir,
+      ...settings.flatMap((setting) => ["-c", setting]), "-",
     ],
   };
+}
+
+export function buildIngredientsAgentInvocation(input: IngredientsAgentInvocationInput): CodexInvocation {
+  return buildRestrictedCodexInvocation({
+    ...input, model: INGREDIENTS_AGENT_MODEL, reasoningEffort: INGREDIENTS_AGENT_REASONING_EFFORT,
+  });
+}
+
+const checkedExecutables = new Set<string>();
+function warnOnUntestedCodex(executable: string, env: NodeJS.ProcessEnv, cwd: string): void {
+  if (checkedExecutables.has(executable)) return;
+  checkedExecutables.add(executable);
+  let version: string | undefined;
+  try {
+    version = /codex-cli\s+(\S+)/.exec(execFileSync(executable, ["--version"], {
+      env, cwd, encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"],
+    }))?.[1];
+  } catch { /* The real invocation will report unsupported flags or configuration. */ }
+  if (version !== TESTED_CODEX_VERSION) {
+    console.warn(`[security] Codex ${version ?? "version unknown"}: model isolation was tested on ${TESTED_CODEX_VERSION}. Tool removal uses individual feature switches; this version's tool inventory is unverified.`);
+  }
 }
 
 function openExclusiveLog(path: string): Promise<WriteStream> {
@@ -286,7 +335,14 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
     events = await openExclusiveLog(input.eventsPath);
     stderr = await openExclusiveLog(input.stderrPath);
 
+    const env = codexEnvironment();
+    if (input.workDir) {
+      mkdirSync(input.workDir, { recursive: true, mode: 0o700 });
+      warnOnUntestedCodex(input.executable, env, input.workDir);
+    }
     const spawned = spawn(input.executable, input.args, {
+      env,
+      ...(input.workDir ? { cwd: input.workDir } : {}),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
       // New process group so timeout/abort can reap MCP/Chrome descendants.

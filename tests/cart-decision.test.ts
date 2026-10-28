@@ -39,7 +39,9 @@ describe("bounded cart decisions", () => {
     expect(invocation.args).toContain("gpt-5.6-terra");
     expect(invocation.args).toContain('model_reasoning_effort="medium"');
     expect(invocation.args.join(" ")).not.toContain("playwright");
-    expect(invocation.args).toContain("read-only");
+    expect(invocation.args).toContain('permissions.wfm-model.extends=":read-only"');
+    expect(invocation.args).toContain('features.shell_tool=false');
+    expect(invocation.args).not.toContain("--sandbox");
   });
 
   it("shows weighted chooser options as a second bounded decision", () => {

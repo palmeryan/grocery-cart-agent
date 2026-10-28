@@ -161,7 +161,6 @@ export function assertReportPreflight(report: CartReport): void {
     const missingGates = (
       [
         ["authenticated", report.authenticated],
-        ["deliveryModeConfirmed", report.deliveryModeConfirmed],
         ["wholeFoodsStorefrontConfirmed", report.wholeFoodsStorefrontConfirmed],
       ] as const
     )
@@ -221,17 +220,10 @@ export function parseAuthReport(text: string): AuthReport {
   return value as AuthReport;
 }
 
-export function assertAuthReportSafe(report: AuthReport): void {
-  if (report.checkoutVisited || report.settingsChanged) {
-    throw new Error("Auth check crossed a prohibited safety boundary");
-  }
-}
-
 export function assertAuthReportReady(report: AuthReport): void {
   const missing = (
     [
       ["authenticated", report.authenticated],
-      ["deliveryModeConfirmed", report.deliveryModeConfirmed],
       [
         "wholeFoodsStorefrontConfirmed",
         report.wholeFoodsStorefrontConfirmed,

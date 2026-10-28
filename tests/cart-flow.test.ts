@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CartNoMutationError, CartRunFatalError, cartTasks, runCartFlow } from "../src/cart-flow.js";
+import { CartNoMutationError, CartRunFatalError, CartUnresolvedMutationError, cartTasks, runCartFlow } from "../src/cart-flow.js";
 import type { ProductCandidate } from "../src/wfm-page.js";
 import type { ShoppingList } from "../src/types.js";
 
@@ -69,6 +69,62 @@ describe("harness cart flow", () => {
     expect(searches).toBe(1);
     expect(adds).toBe(1);
     expect(result.timings[0]?.outcome).toBe("failed");
+  });
+
+  it("records an unresolved add as failed and uses its snapshot for the next item", async () => {
+    const attempted: string[] = [];
+    const baselines: unknown[] = [];
+    const carts: unknown[] = [];
+    const result = await runCartFlow({
+      tasks: cartTasks(list), baseline: [],
+      search: async (query) => [candidate(query === "rice" ? "B000000001" : "B000000002", query)],
+      decide: async (_task, candidates, cart) => {
+        carts.push([...cart]);
+        return { action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null };
+      },
+      add: async (_task, selected, _quantity, _option, before) => {
+        attempted.push(selected.id);
+        baselines.push([...before]);
+        const snapshot = {
+          items: [...before, { asin: selected.id, quantity: selected.id === "B000000001" ? 0.5 : 1 }],
+          observedAt: "now", url: "https://www.wholefoodsmarket.com/api/cartcache", method: "POST", status: 200,
+        };
+        if (selected.id === "B000000001") {
+          throw new CartUnresolvedMutationError("Could not correlate the Rice cart change", snapshot);
+        }
+        return snapshot;
+      },
+    });
+    expect(attempted).toEqual(["B000000001", "B000000002"]);
+    expect(baselines).toEqual([[], [{ asin: "B000000001", quantity: 0.5 }]]);
+    expect(carts[1]).toMatchObject([{ productId: "B000000001", productName: "rice", quantity: 0.5 }]);
+    expect(result.results.map((item) => item.status)).toEqual(["failed", "added"]);
+    expect(result.results[0]?.failureReason).toContain("Could not correlate");
+    expect(result.stopped).toBe(false);
+    expect(result.completed).toBe(2);
+    expect(result.latestSnapshot?.items).toHaveLength(2);
+  });
+
+  it("still stops when cancellation accompanies an unresolved add", async () => {
+    const controller = new AbortController();
+    let searches = 0;
+    const result = await runCartFlow({
+      tasks: cartTasks(list), baseline: [], signal: controller.signal,
+      search: async () => { searches += 1; return [candidate("B000000001", "Rice")]; },
+      decide: async () => ({ action: "select", candidateId: "B000000001", quantity: 1, option: null, reason: null }),
+      add: async () => {
+        controller.abort();
+        throw new CartUnresolvedMutationError("Cart outcome unknown", {
+          items: [{ asin: "B000000001", quantity: 1 }], observedAt: "now",
+          url: "https://www.wholefoodsmarket.com/api/cartcache", method: "POST", status: 200,
+        });
+      },
+    });
+    expect(result.stopped).toBe(true);
+    expect(result.results).toHaveLength(1);
+    expect(result.failure?.stage).toBe("interaction");
+    expect(searches).toBe(1);
+    expect(result.latestSnapshot?.items).toHaveLength(1);
   });
 
   it("retries a rejected product once with a different SKU and continues shopping", async () => {

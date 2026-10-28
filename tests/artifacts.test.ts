@@ -39,7 +39,7 @@ describe("artifact paths", () => {
 });
 
 describe("configuration", () => {
-  it("uses a profile outside the repository and defaults to delivery", () => {
+  it("uses a profile outside the repository", () => {
     const config = loadConfig(
       {
         HOME: "/Users/test",
@@ -49,7 +49,6 @@ describe("configuration", () => {
     expect(config.profileDir).toBe(
       "/Users/test/.whole-foods-cart/chrome-profile",
     );
-    expect(config.deliveryMode).toBe("delivery");
     expect(sha256("same")).toHaveLength(64);
   });
 

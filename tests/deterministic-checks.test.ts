@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAuthReportFromObservation,
-  hasDeliveryMode,
   isWholeFoodsStorefront,
   parseAccountSummaryAuthentication,
   readAccountAuthentication,
@@ -11,36 +10,14 @@ import type { Page } from "playwright";
 const storefrontUrl = "https://www.wholefoodsmarket.com/grocery/search";
 
 describe("deterministic storefront predicates", () => {
-  it("observes delivery mode independently from address text", () => {
-    expect(hasDeliveryMode("Deliver to Ryan\nColumbus 43214")).toBe(true);
-    expect(hasDeliveryMode("Columbus 43214\nChoose pickup store")).toBe(false);
-  });
-
-  it("requires delivery mode and storefront, without requiring address text", () => {
-    const addressOnly = buildAuthReportFromObservation(
+  it("requires authentication and storefront without inspecting delivery mode", () => {
+    const report = buildAuthReportFromObservation(
       storefrontUrl,
       "Whole Foods Market\nHi, Ryan\nAccount & Orders\nColumbus 43214\nChoose pickup store",
       true,
-      { deliveryMode: "delivery" },
     );
-    expect(addressOnly.deliveryModeConfirmed).toBe(false);
-    expect(addressOnly.runStatus).toBe("failed");
-
-    const noAddress = buildAuthReportFromObservation(
-      storefrontUrl,
-      "Whole Foods Market\nDeliver to Ryan",
-      true,
-    );
-    expect(noAddress.deliveryModeConfirmed).toBe(true);
-    expect(noAddress.runStatus).toBe("completed");
-
-    const complete = buildAuthReportFromObservation(
-      storefrontUrl,
-      "Whole Foods Market\nHi, Ryan\nAccount & Orders\nDeliver to Ryan\nColumbus 43214",
-      true,
-      { deliveryMode: "delivery" },
-    );
-    expect(complete.runStatus).toBe("completed");
+    expect(report.runStatus).toBe("completed");
+    expect(report).not.toHaveProperty("deliveryModeConfirmed");
   });
 
   it("uses the account API result rather than storefront presentation text", () => {

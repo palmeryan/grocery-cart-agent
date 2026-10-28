@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   assertAttachmentReportSafe,
-  assertAuthReportSafe,
   assertAuthReportReady,
   assertReportMatchesShoppingList,
   assertReportPreflight,
@@ -114,7 +113,7 @@ describe("report validation", () => {
     const report = parseReport(
       readFileSync(fixture("valid-report.json"), "utf8"),
     );
-    expect(report.checkoutVisited).toBe(false);
+    expect(report).not.toHaveProperty("checkoutVisited");
   });
 
   it("accepts fractional quantities for weighted cart snapshots", () => {
@@ -163,7 +162,7 @@ describe("report validation", () => {
       .toThrow(/duplicate ingredient IDs: chicken/);
   });
 
-  it("passes preflight when auth and location gates are confirmed", () => {
+  it("passes preflight when auth and storefront gates are confirmed", () => {
     const report = parseReport(
       readFileSync(fixture("valid-report.json"), "utf8"),
     );
@@ -172,10 +171,8 @@ describe("report validation", () => {
 
   it.each([
     ["completed", "authenticated", { authenticated: false }],
-    ["completed", "deliveryModeConfirmed", { deliveryModeConfirmed: false }],
     ["completed", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
     ["partial", "authenticated", { authenticated: false }],
-    ["partial", "deliveryModeConfirmed", { deliveryModeConfirmed: false }],
     ["partial", "wholeFoodsStorefrontConfirmed", { wholeFoodsStorefrontConfirmed: false }],
   ] as const)(
     "rejects %s preflight when %s is false",
@@ -191,13 +188,12 @@ describe("report validation", () => {
     },
   );
 
-  it("allows failed reports with false auth/location gates", () => {
+  it("allows failed reports with false auth/storefront gates", () => {
     const report = parseReport(
       readFileSync(fixture("valid-report.json"), "utf8"),
     );
     report.runStatus = "failed";
     report.authenticated = false;
-    report.deliveryModeConfirmed = false;
     report.wholeFoodsStorefrontConfirmed = false;
     report.failureReason = "not authenticated";
     expect(() => assertReportPreflight(report)).not.toThrow();
@@ -239,15 +235,13 @@ const validAuthReport = () =>
   );
 
 describe("auth report validation", () => {
-  it("accepts a successful non-mutating auth report", () => {
+  it("accepts a successful auth report", () => {
     const report = parseAuthReport(JSON.stringify(validAuthReport()));
-    expect(() => assertAuthReportSafe(report)).not.toThrow();
     expect(() => assertAuthReportReady(report)).not.toThrow();
   });
 
   it.each([
     ["authenticated", false],
-    ["deliveryModeConfirmed", false],
     ["wholeFoodsStorefrontConfirmed", false],
   ] as const)("rejects an incomplete %s readiness result", (field, value) => {
     const report = validAuthReport();
@@ -257,23 +251,11 @@ describe("auth report validation", () => {
     ).toThrow();
   });
 
-  it.each([
-    ["checkoutVisited", true],
-    ["settingsChanged", true],
-  ] as const)("rejects a true %s safety flag", (field, value) => {
-    const report = validAuthReport();
-    report[field] = value;
-    expect(() =>
-      assertAuthReportSafe(parseAuthReport(JSON.stringify(report))),
-    ).toThrow("prohibited safety boundary");
-  });
-
   it("includes the reported failure reason when an auth gate fails", () => {
     const report = {
       ...validAuthReport(),
       runStatus: "failed",
       authenticated: false,
-      deliveryModeConfirmed: false,
       wholeFoodsStorefrontConfirmed: false,
       failureReason: "Playwright Extension was not found",
     };

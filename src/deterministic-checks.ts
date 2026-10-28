@@ -27,17 +27,6 @@ const pageText = async (page: Page): Promise<string> => {
   }
 };
 
-export interface DeliveryContextExpectation {
-  deliveryMode: "delivery";
-}
-
-export const hasDeliveryMode = (
-  text: string,
-  deliveryMode: "delivery" = "delivery",
-): boolean =>
-  deliveryMode === "delivery" &&
-  /\bdeliver(?:y| to|ing)\b|\bdelivery address\b/i.test(text);
-
 export const isWholeFoodsStorefront = (url: string, text: string): boolean => {
   try {
     const { hostname } = new URL(url);
@@ -105,10 +94,7 @@ const failedReport = (
     : {
         runStatus: "failed",
         authenticated: false,
-        deliveryModeConfirmed: false,
         wholeFoodsStorefrontConfirmed: false,
-        checkoutVisited: false,
-        settingsChanged: false,
         failureReason:
           "Deterministic preflight could not inspect the signed-in Whole Foods page",
       };
@@ -117,28 +103,19 @@ export const buildAuthReportFromObservation = (
   url: string,
   text: string,
   authenticated: boolean,
-  expectation: DeliveryContextExpectation = {
-    deliveryMode: "delivery",
-  },
 ): AuthReport => {
-  const deliveryModeConfirmed = hasDeliveryMode(text, expectation.deliveryMode);
   const wholeFoodsStorefrontConfirmed = isWholeFoodsStorefront(url, text);
   const completed =
     authenticated &&
-    deliveryModeConfirmed &&
     wholeFoodsStorefrontConfirmed;
   const missing = [
     !authenticated ? "authentication (account API reported signed out)" : null,
-    !deliveryModeConfirmed ? "delivery mode" : null,
     !wholeFoodsStorefrontConfirmed ? "Whole Foods storefront" : null,
   ].filter((value): value is string => value !== null);
   return {
     runStatus: completed ? "completed" : "failed",
     authenticated,
-    deliveryModeConfirmed,
     wholeFoodsStorefrontConfirmed,
-    checkoutVisited: false,
-    settingsChanged: false,
     failureReason: completed
       ? null
       : `Deterministic preflight could not confirm: ${missing.join(", ")}`,
@@ -180,7 +157,6 @@ export const readAccountAuthentication = async (page: Page): Promise<boolean> =>
 
 const runAuthCheck = async (
   page: Page,
-  expectation: DeliveryContextExpectation,
 ): Promise<AuthReport> => {
   const [text, authenticated] = await Promise.all([
     pageText(page),
@@ -190,16 +166,12 @@ const runAuthCheck = async (
     page.url(),
     text,
     authenticated,
-    expectation,
   );
 };
 
 export async function runDeterministicCheck(
   kind: "auth-check" | "attachment-check",
   session: OwnedChromeSession,
-  expectation: DeliveryContextExpectation = {
-    deliveryMode: "delivery",
-  },
 ): Promise<AuthReport | AttachmentReport> {
   if (session.remoteDebuggingPort === undefined) {
     throw new Error("Chrome was not launched with a debugging port");
@@ -215,7 +187,7 @@ export async function runDeterministicCheck(
     );
     return kind === "attachment-check"
       ? await runAttachmentCheck(page)
-      : await runAuthCheck(page, expectation);
+      : await runAuthCheck(page);
   } catch (error) {
     const report = failedReport(kind);
     report.failureReason =

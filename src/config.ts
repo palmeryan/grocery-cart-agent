@@ -5,8 +5,6 @@ export interface AppConfig {
   rootDir: string;
   runsDir: string;
   profileDir: string;
-  /** The storefront mode this harness is intended to use. */
-  deliveryMode: "delivery";
   maxRunMs: number;
   codexBin: string;
   chromeExecutable: string;
@@ -48,7 +46,6 @@ export function loadConfig(
     rootDir: absoluteRoot,
     runsDir: join(absoluteRoot, "runs"),
     profileDir,
-    deliveryMode: "delivery",
     maxRunMs,
     codexBin: env.CODEX_BIN ?? "codex",
     chromeExecutable:

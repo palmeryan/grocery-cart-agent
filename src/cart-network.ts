@@ -142,11 +142,17 @@ export function parseCartNetworkSnapshot(
   return { ...metadata, items };
 }
 
-export function getSuccessfulFullCartPost(
+export function getSuccessfulFullCartMutation(
   records: readonly CartNetworkResponseRecord[],
 ): CartNetworkSnapshot | null {
-  return [...records].reverse().find((record) =>
-    record.method === "POST" && record.status >= 200 && record.status < 300 && record.snapshot !== null
+  return records.map((record, index) => ({ record, index }))
+    .sort((left, right) =>
+      right.record.timestamp.localeCompare(left.record.timestamp) || right.index - left.index,
+    )
+    .map(({ record }) => record)
+    .find((record) =>
+    (record.method === "POST" || record.method === "PUT") &&
+    record.status >= 200 && record.status < 300 && record.snapshot !== null
   )?.snapshot ?? null;
 }
 
@@ -169,7 +175,7 @@ export class CartNetworkObserver {
     const url = response.url();
     if (!isCartEndpoint(url)) return;
     const method = response.request().method().toUpperCase();
-    if (method !== "GET" && method !== "POST") return;
+    if (method !== "GET" && method !== "POST" && method !== "PUT") return;
     const timestamp = new Date().toISOString();
     let body = "";
     let snapshot: CartNetworkSnapshot | null = null;
@@ -243,29 +249,27 @@ export class CartNetworkObserver {
     let unchanged: CartNetworkSnapshot | null = null;
     let partial: CartNetworkSnapshot | null = null;
     let partialDelta: number | null = null;
-    let malformedPost = false;
+    let malformedMutation = false;
 
     const inspect = (): CartMutationObservation | null => {
-      for (; cursor < this.records.length; cursor += 1) {
-        const record = this.records[cursor];
-        if (!record) break;
-        if (record.method !== "POST") continue;
+      const batch = this.records.slice(cursor).sort((left, right) =>
+        left.timestamp.localeCompare(right.timestamp),
+      );
+      cursor = this.records.length;
+      let confirmed: CartMutationObservation | null = null;
+      let unexpected: CartMutationObservation | null = null;
+      for (const record of batch) {
+        if (record.method !== "POST" && record.method !== "PUT") continue;
         if (!(record.status >= 200 && record.status < 300) || record.snapshot === null) {
-          malformedPost = true;
+          malformedMutation = true;
           continue;
         }
         const current = quantityMap(record.snapshot.items);
         const delta = (current.get(asin) ?? 0) - (previous.get(asin) ?? 0);
-        const allAsins = new Set([...previous.keys(), ...current.keys()]);
-        const unrelatedChanged = [...allAsins].some((key) =>
-          key !== asin && previous.get(key) !== current.get(key));
-        if (unrelatedChanged) {
-          return { status: "unknown", snapshot: record.snapshot, delta, records: [],
-            diagnostic: `Cart changed an unrelated ASIN during the add for ${asin}.` };
-        }
         if (expectation.expectedQuantity === "positive" ? delta > 0 : delta === expectation.expectedQuantity) {
-          return { status: "confirmed", snapshot: record.snapshot, delta, records: [],
+          confirmed = { status: "confirmed", snapshot: record.snapshot, delta, records: [],
             diagnostic: `Network cart increased ${asin} by ${delta}.` };
+          continue;
         }
         if (delta === 0) {
           const rejection = cartRejectionForAsin(record.body, asin);
@@ -280,11 +284,11 @@ export class CartNetworkObserver {
           partialDelta = delta;
         }
         else {
-          return { status: "unknown", snapshot: record.snapshot, delta, records: [],
+          unexpected = { status: "unknown", snapshot: record.snapshot, delta, records: [],
             diagnostic: `Cart quantity delta for ${asin} was ${delta}; expected ${expectation.expectedQuantity}.` };
         }
       }
-      return null;
+      return confirmed ?? unexpected;
     };
 
     while (Date.now() < deadline) {
@@ -305,19 +309,17 @@ export class CartNetworkObserver {
       return { status: "unknown", snapshot: partial, delta: partialDelta, records,
         diagnostic: `Cart increase for ${asin} stopped at ${partialDelta}; expected ${expectation.expectedQuantity}.` };
     }
-    if (unchanged !== null && !malformedPost) {
-      return { status: "no_mutation", snapshot: unchanged, delta: 0, records,
-        diagnostic: `No quantity change for ${asin} after the mutation timeout.` };
-    }
     return { status: "unknown", snapshot: unchanged, delta: unchanged ? 0 : null, records,
-      diagnostic: "No matching successful full-cart mutation was observed; the cart effect is unknown." };
+      diagnostic: unchanged !== null && !malformedMutation
+        ? `An unchanged full-cart response was observed for ${asin}, but it was not correlated with this mutation; the cart effect is unknown.`
+        : "No matching successful full-cart mutation was observed; the cart effect is unknown." };
   }
 
-  async waitForFullCartPost(timeoutMs = 2_000): Promise<CartNetworkResponseRecord[]> {
+  async waitForFullCartMutation(timeoutMs = 2_000): Promise<CartNetworkResponseRecord[]> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await Promise.all([...this.pending]);
-      if (getSuccessfulFullCartPost(this.records)) break;
+      if (getSuccessfulFullCartMutation(this.records)) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     await Promise.all([...this.pending]);

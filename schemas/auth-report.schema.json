@@ -5,19 +5,13 @@
   "required": [
     "runStatus",
     "authenticated",
-    "deliveryModeConfirmed",
     "wholeFoodsStorefrontConfirmed",
-    "checkoutVisited",
-    "settingsChanged",
     "failureReason"
   ],
   "properties": {
     "runStatus": { "type": "string", "enum": ["completed", "failed"] },
     "authenticated": { "type": "boolean" },
-    "deliveryModeConfirmed": { "type": "boolean" },
     "wholeFoodsStorefrontConfirmed": { "type": "boolean" },
-    "checkoutVisited": { "type": "boolean" },
-    "settingsChanged": { "type": "boolean" },
     "failureReason": { "type": ["string", "null"] }
   }
 }

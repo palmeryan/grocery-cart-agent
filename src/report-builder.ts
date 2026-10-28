@@ -142,7 +142,7 @@ const verifyResults = (
   baseline: CartInspectionResult,
   final: CartInspectionResult,
 ): VerificationNote[] => {
-  const delta = computeCartDelta(baseline.items, final.items);
+  const delta = computeCartDelta(baseline.items, final.items).map((item) => ({ ...item }));
   const deltaAvailable =
     baseline.extractionStatus !== "degraded" &&
     final.extractionStatus !== "degraded";
@@ -155,6 +155,11 @@ const verifyResults = (
         ? cartItemsContain(delta, result)
         : cartItemsContain(baseline.items, result) ||
           cartItemsContain(final.items, result);
+    if (verified && result.status === "added") {
+      // Allocate each observed unit once across reported additions of the same product.
+      const matched = delta.find((item) => itemMatchesResult(item, result))!;
+      matched.quantity -= result.quantity === 1 ? Math.min(1, matched.quantity) : result.quantity;
+    }
     if (!verified) {
       notes.push({
         ingredientId: result.ingredientId,
@@ -211,10 +216,7 @@ export function buildCartReport(input: BuildCartReportInput): CartReport {
     verificationStatus,
     requestSha256: input.requestSha256,
     authenticated: input.preflight.authenticated,
-    deliveryModeConfirmed: input.preflight.deliveryModeConfirmed,
     wholeFoodsStorefrontConfirmed: input.preflight.wholeFoodsStorefrontConfirmed,
-    checkoutVisited: input.preflight.checkoutVisited,
-    settingsChanged: input.preflight.settingsChanged,
     baselineCartCount: input.baseline.totalItemCount,
     baselineItems: [...input.baseline.items],
     finalCartCount: input.final.totalItemCount,
@@ -262,10 +264,7 @@ export function buildFailedCartReport(input: {
     verificationStatus: "not_run",
     requestSha256: input.requestSha256,
     authenticated: input.preflight.authenticated,
-    deliveryModeConfirmed: input.preflight.deliveryModeConfirmed,
     wholeFoodsStorefrontConfirmed: input.preflight.wholeFoodsStorefrontConfirmed,
-    checkoutVisited: input.preflight.checkoutVisited,
-    settingsChanged: input.preflight.settingsChanged,
     baselineCartCount: getTotalItemCount(baselineItems),
     baselineItems,
     finalCartCount: getTotalItemCount(baselineItems),

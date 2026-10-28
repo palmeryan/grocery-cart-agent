@@ -31,6 +31,7 @@ export type InvokeIngredientsAgent = (
 export interface RunIngredientsAgentInput {
   executable: string;
   rootDir: string;
+  workDir?: string;
   schemaPath: string;
   outputPath: string;
   eventsPath: string;
@@ -75,12 +76,14 @@ export async function runIngredientsAgent(
 }> {
   const invocation = buildIngredientsAgentInvocation({
     rootDir: input.rootDir,
+    ...(input.workDir ? { workDir: input.workDir } : {}),
     outputPath: input.outputPath,
     schemaPath: input.schemaPath,
   });
   const codex = await runCodex({
     executable: input.executable,
     args: invocation.args,
+    workDir: invocation.workDir,
     prompt: renderIngredientsAgentPrompt({ recipeDocuments: input.documents }),
     eventsPath: input.eventsPath,
     stderrPath: input.stderrPath,

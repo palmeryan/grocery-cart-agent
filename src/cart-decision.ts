@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
-import type { ReasoningEffort } from "./codex.js";
+import { buildRestrictedCodexInvocation, type CodexInvocation, type ReasoningEffort } from "./codex.js";
 import type { CartItemSnapshot, GroceryIngredient, ShoppingQuantity } from "./types.js";
 import type { QuantityOption } from "./wfm-page.js";
 
@@ -42,13 +42,14 @@ export interface DecisionPromptInput {
 
 export interface DecisionInvocationInput {
   rootDir: string;
+  workDir?: string;
   outputPath: string;
   schemaPath: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
 }
 
-export interface DecisionInvocation { args: string[] }
+export type DecisionInvocation = CodexInvocation;
 
 const template = readFileSync(fileURLToPath(new URL("../prompts/cart-decision.md", import.meta.url)), "utf8").trim();
 const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../schemas/cart-decision.schema.json", import.meta.url)), "utf8")) as object;
@@ -133,5 +134,8 @@ export function parseAndValidateDecision(
 ): CartDecision { return validateDecision(parseDecision(text), candidates, currentCart); }
 
 export function buildDecisionInvocation(input: DecisionInvocationInput): DecisionInvocation {
-  return { args: ["exec", "--model", input.model ?? DECISION_MODEL, "-c", `model_reasoning_effort="${input.reasoningEffort ?? DECISION_REASONING_EFFORT}"`, "--ignore-user-config", "--strict-config", "--ephemeral", "--sandbox", "read-only", "--json", "--output-schema", input.schemaPath, "--output-last-message", input.outputPath, "--cd", input.rootDir, "-c", 'approval_policy="never"', "-"] };
+  return buildRestrictedCodexInvocation({
+    ...input, model: input.model ?? DECISION_MODEL,
+    reasoningEffort: input.reasoningEffort ?? DECISION_REASONING_EFFORT,
+  });
 }

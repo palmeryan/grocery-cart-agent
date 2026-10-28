@@ -1,7 +1,21 @@
 {
   "name": "whole-foods-cart",
   "version": "0.1.0",
+  "description": "Local CLI tool that turns recipes into reviewed Whole Foods delivery carts using Codex CLI and Chrome CDP",
+  "author": "Ryan Palmer",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/palmeryan/whole-foods-cart.git"
+  },
+  "keywords": [
+    "whole-foods",
+    "grocery",
+    "cart",
+    "codex",
+    "playwright",
+    "automation"
+  ],
   "private": true,
   "type": "module",
   "engines": {

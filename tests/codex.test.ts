@@ -12,6 +12,7 @@ import {
   INGREDIENTS_AGENT_MODEL,
   INGREDIENTS_AGENT_REASONING_EFFORT,
   buildIngredientsAgentInvocation,
+  codexEnvironment,
   createKillEscalation,
   runCodex,
 } from "../src/codex.js";
@@ -26,7 +27,7 @@ const processAlive = (pid: number): boolean => {
 };
 
 describe("Codex invocation", () => {
-  it("builds a read-only Ingredients Agent invocation without browser or MCP settings", () => {
+  it("builds a restricted invocation with no project-file grants", () => {
     const invocation = buildIngredientsAgentInvocation({
       rootDir: "/repo",
       outputPath: "/repo/runs/id/ingredients-agent-output.json",
@@ -37,7 +38,12 @@ describe("Codex invocation", () => {
     expect(invocation.args).toContain("/repo/schemas/ingredients-agent-output.schema.json");
     expect(invocation.args).toContain("--output-last-message");
     expect(invocation.args).toContain("/repo/runs/id/ingredients-agent-output.json");
-    expect(invocation.args).toContain("read-only");
+    expect(joined).not.toContain("--sandbox");
+    expect(invocation.args).toContain('permissions.wfm-model.extends=":read-only"');
+    expect(invocation.args).toContain('permissions.wfm-model.network.enabled=false');
+    expect(invocation.args).toContain('features.shell_tool=false');
+    expect(invocation.args).toContain('web_search="disabled"');
+    expect(invocation.workDir).toBe("/repo/runs/id/model-work");
     expect(invocation.args).toContain(INGREDIENTS_AGENT_MODEL);
     expect(invocation.args).toContain(
       `model_reasoning_effort="${INGREDIENTS_AGENT_REASONING_EFFORT}"`,
@@ -45,6 +51,21 @@ describe("Codex invocation", () => {
     expect(invocation.args.at(-1)).toBe("-");
     expect(joined).not.toContain("playwright");
     expect(joined).not.toContain("--cdp-endpoint");
+  });
+});
+
+describe("Codex environment", () => {
+  it("preserves CLI authentication and proxy settings while excluding unrelated secrets and shell injection settings", () => {
+    expect(codexEnvironment({
+      PATH: "/usr/bin", HOME: "/home/test", CODEX_HOME: "/home/test/.codex",
+      OPENAI_API_KEY: "synthetic-auth", HTTPS_PROXY: "http://proxy.test:3128",
+      SSL_CERT_FILE: "/certs/test.pem", AWS_SECRET_ACCESS_KEY: "unrelated-secret",
+      NODE_OPTIONS: "--require /untrusted/script.js", BASH_ENV: "/untrusted/startup",
+    })).toEqual({
+      PATH: "/usr/bin", HOME: "/home/test", CODEX_HOME: "/home/test/.codex",
+      OPENAI_API_KEY: "synthetic-auth", HTTPS_PROXY: "http://proxy.test:3128",
+      SSL_CERT_FILE: "/certs/test.pem",
+    });
   });
 });
 
@@ -72,6 +93,23 @@ describe("Codex process", () => {
       .toContain("NEVER open or enter checkout");
     expect(readFileSync(join(runDir, "stderr.log"), "utf8"))
       .toContain("fake-codex-stderr");
+  });
+
+  it("does not pass unrelated parent environment secrets to the child", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-codex-env-"));
+    vi.stubEnv("WFM_TEST_PRIVATE_SECRET", "SYNTHETIC_PRIVATE_SECRET");
+    try {
+      const result = await runCodex({
+        executable: process.execPath,
+        args: ["-e", "process.stdout.write(JSON.stringify({secret:process.env.WFM_TEST_PRIVATE_SECRET ?? null}));"],
+        prompt: "", eventsPath: join(runDir, "events.jsonl"),
+        stderrPath: join(runDir, "stderr.log"), timeoutMs: 5_000,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(join(runDir, "events.jsonl"), "utf8"))).toEqual({ secret: null });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("terminates and reports a timeout", async () => {

@@ -26,7 +26,6 @@ import {
   connectToOwnedChrome,
   isWholeFoodsPage,
   runDeterministicCheck,
-  type DeliveryContextExpectation,
 } from "./deterministic-checks.js";
 import {
   INGREDIENTS_AGENT_MODEL,
@@ -41,7 +40,7 @@ import {
   type CartNetworkSnapshot,
 } from "./cart-network.js";
 import { DECISION_MODEL, DECISION_REASONING_EFFORT, buildDecisionInvocation, parseAndValidateDecision, quantityFromSelectedPackSize, renderDecisionPrompt } from "./cart-decision.js";
-import { CartNoMutationError, CartRunFatalError, cartTasks, runCartFlow, type CartFlowResult } from "./cart-flow.js";
+import { CartNoMutationError, CartUnresolvedMutationError, CartRunFatalError, cartTasks, runCartFlow, type CartFlowResult } from "./cart-flow.js";
 import { runIngredientsAgent, type RecipeDocument } from "./ingredients-agent.js";
 import { enterRecipes } from "./recipe-entry.js";
 import { reviewShoppingList } from "./shopping-list-review.js";
@@ -61,7 +60,6 @@ import {
 import {
   assertAttachmentReportSafe,
   assertAuthReportReady,
-  assertAuthReportSafe,
   assertReportMatchesShoppingList,
   assertReportPreflight,
   loadShoppingList,
@@ -103,7 +101,6 @@ interface CliDependencies {
   runDeterministicCheck?: (
     kind: "auth-check" | "attachment-check",
     session: OwnedChromeSession,
-    expectation?: DeliveryContextExpectation,
   ) => Promise<AuthReport | AttachmentReport>;
   releaseLock?: (lock: RunLock) => void;
 }
@@ -164,14 +161,12 @@ const inspectionFromNetworkSnapshot = (
     }
   }
   const items = snapshot.items.map(({ asin, quantity }) => {
-    const productName = names.get(asin.toUpperCase());
-    return productName ? { productName, productId: asin, quantity } : null;
+    const productName = names.get(asin.toUpperCase()) ?? asin;
+    return { productName, productId: asin, quantity };
   });
-  if (items.some((item) => item === null)) return null;
-  const verifiedItems = items.filter((item): item is NonNullable<typeof item> => item !== null);
   return {
-    items: verifiedItems,
-    totalItemCount: verifiedItems.reduce((count, item) => count + item.quantity, 0),
+    items,
+    totalItemCount: items.reduce((count, item) => count + item.quantity, 0),
     url: snapshot.url,
     bodyText: "Cart verified from successful full-cart network response.",
     extractionStatus: "complete",
@@ -567,6 +562,7 @@ export async function runCli(
         const compiled = await runIngredients({
           executable: config.codexBin,
           rootDir,
+          workDir: join(paths.runDir, "model-work"),
           schemaPath: join(rootDir, INGREDIENTS_AGENT_SCHEMA_PATH),
           outputPath: join(ingredientsDir, "output.json"),
           eventsPath: join(ingredientsDir, "codex-events.jsonl"),
@@ -691,10 +687,7 @@ export async function runCli(
         const abortedPreflight: AuthReport = {
           runStatus: "failed",
           authenticated: false,
-          deliveryModeConfirmed: false,
           wholeFoodsStorefrontConfirmed: false,
-          checkoutVisited: false,
-          settingsChanged: false,
           failureReason: "Cart run aborted before deterministic preflight",
         };
         invocationAttempted = true;
@@ -721,9 +714,7 @@ export async function runCli(
       try {
         const check = dependencies.runDeterministicCheck ?? runDeterministicCheck;
         const diagnosticCommand = parsed.command as "auth-check" | "attachment-check";
-        const report = await check(diagnosticCommand, browser, {
-          deliveryMode: config.deliveryMode,
-        });
+        const report = await check(diagnosticCommand, browser);
         writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
           mode: 0o600,
         });
@@ -736,7 +727,6 @@ export async function runCli(
       try {
         if (parsed.command === "auth-check") {
           const report = parseAuthReport(readFileSync(paths.reportPath, "utf8"));
-          assertAuthReportSafe(report);
           try {
             assertAuthReportReady(report);
           } catch (error) {
@@ -744,7 +734,7 @@ export async function runCli(
             const reason = error instanceof Error ? error.message : String(error);
             console.error(reason);
             console.error(
-              "Dedicated Chrome left open so you can sign in or correct the delivery context. Close it before retrying.",
+              "Dedicated Chrome left open so you can sign in or open the storefront. Close it before retrying.",
             );
             exitCode = 1;
             return await finish();
@@ -769,44 +759,33 @@ export async function runCli(
     const requestValue = request!;
     const check = dependencies.runDeterministicCheck ?? runDeterministicCheck;
     const inspect = dependencies.inspectCart ?? inspectOwnedCart;
-    status("Checking Whole Foods sign-in and delivery context");
-    const preflight = (await check("auth-check", browser, {
-      deliveryMode: config.deliveryMode,
-    })) as AuthReport;
+    status("Checking Whole Foods sign-in and storefront");
+    const preflight = (await check("auth-check", browser)) as AuthReport;
     const readinessReady =
       preflight.runStatus === "completed" &&
       preflight.authenticated &&
-      preflight.deliveryModeConfirmed &&
       preflight.wholeFoodsStorefrontConfirmed;
-    const safetyReady =
-      !preflight.checkoutVisited && !preflight.settingsChanged;
 
     invocationAttempted = true;
-    if (!readinessReady || !safetyReady) {
+    if (!readinessReady) {
       const report = buildFailedCartReport({
         request: requestValue,
         requestSha256,
         preflight,
         failureReason:
           preflight.failureReason ??
-          "Deterministic preflight did not confirm the Whole Foods delivery context",
+          "Deterministic preflight did not confirm the Whole Foods storefront",
       });
       writeFileSync(paths.reportPath, `${JSON.stringify(report)}\n`, {
         mode: 0o600,
       });
-      if (!safetyReady) {
-        console.error(
-          `Cart safety check failed: checkoutVisited=${preflight.checkoutVisited}, settingsChanged=${preflight.settingsChanged}. Inspect ${paths.runDir}`,
-        );
-      } else {
-        leaveBrowserOpen = true;
-        console.error(
-          `Cart readiness check failed: ${preflight.failureReason ?? "the storefront is not ready for a cart run"}`,
-        );
-        console.error(
-          `Dedicated Chrome left open so you can sign in or correct the delivery context. Close it before retrying. Report: ${paths.reportPath}`,
-        );
-      }
+      leaveBrowserOpen = true;
+      console.error(
+        `Cart readiness check failed: ${preflight.failureReason ?? "the storefront is not ready for a cart run"}`,
+      );
+      console.error(
+        `Dedicated Chrome left open so you can sign in or open the storefront. Close it before retrying. Report: ${paths.reportPath}`,
+      );
       exitCode = 1;
       return await finish();
     }
@@ -880,8 +859,8 @@ export async function runCli(
           const attempt = (decisionAttempts.get(task.ingredient.id) ?? 0) + 1;
           decisionAttempts.set(task.ingredient.id, attempt);
           const outputPath = join(itemDir, `decision-${attempt}.json`);
-          const invocation = buildDecisionInvocation({ rootDir, outputPath, schemaPath: join(rootDir, DECISION_SCHEMA_PATH), model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort });
-          const result = await runCodex({ executable: config.codexBin, args: invocation.args, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null, ...(task.ingredient.purchaseRequirement ? { purchaseRequirement: task.ingredient.purchaseRequirement } : {}) }, recipeContext: task.recipeContext, candidates, currentCart: cart, ...(quantityOptions ? { quantityOptions, selectedPackSize: selectedPackSize ?? null } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
+          const invocation = buildDecisionInvocation({ rootDir, workDir: join(paths!.runDir, "model-work"), outputPath, schemaPath: join(rootDir, DECISION_SCHEMA_PATH), model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort });
+          const result = await runCodex({ executable: config.codexBin, args: invocation.args, workDir: invocation.workDir, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null, ...(task.ingredient.purchaseRequirement ? { purchaseRequirement: task.ingredient.purchaseRequirement } : {}) }, recipeContext: task.recipeContext, candidates, currentCart: cart, ...(quantityOptions ? { quantityOptions, selectedPackSize: selectedPackSize ?? null } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
           if (result.exitCode !== 0 || result.timedOut) throw new Error("Cart decision Codex invocation failed");
           return parseAndValidateDecision(readFileSync(outputPath, "utf8"), candidates, cart);
         };
@@ -947,6 +926,9 @@ export async function runCli(
             if (outcome.status === "rejected" || outcome.status === "no_mutation") {
               throw new CartNoMutationError(outcome.diagnostic, outcome.snapshot);
             }
+            if (outcome.status === "unknown" && outcome.snapshot) {
+              throw new CartUnresolvedMutationError(outcome.diagnostic, outcome.snapshot);
+            }
             if (clickError) {
               throw new Error(`${clickError instanceof Error ? clickError.message : String(clickError)}; ${outcome.diagnostic}`, { cause: clickError });
             }
@@ -1001,7 +983,7 @@ export async function runCli(
       : null;
     if (networkFinal) {
       final = networkFinal;
-      console.log("Final cart verification used a reconciled full-cart network POST snapshot.");
+      console.log("Final cart verification used a reconciled full-cart network mutation snapshot.");
     } else try {
       final = await inspect(browser);
       console.log(
@@ -1048,35 +1030,27 @@ export async function runCli(
 
     try {
       assertReportMatchesShoppingList(report, requestValue);
-      if (report.requestSha256 !== requestSha256) {
-        throw new Error("Report requestSha256 does not match the request");
-      }
       assertReportPreflight(report);
-      if (report.checkoutVisited || report.settingsChanged) {
-        console.error(`Safety condition violated; inspect ${paths.runDir}`);
-        exitCode = 1;
+      if (report.runStatus === "failed") {
+        leaveBrowserOpen = true;
+        console.error(
+          `Cart run failed: ${report.failureReason ?? "unknown failure"}. Report: ${paths.reportPath}`,
+        );
+        console.error(
+          "Dedicated Chrome left open so you can inspect the failed run. Close it before retrying.",
+        );
+      } else if (report.verificationStatus === "inconclusive") {
+        leaveBrowserOpen = true;
+        console.warn(
+          `Cart run ${report.runStatus}, but final verification was inconclusive: ${report.verificationNotes?.join(" ") ?? "the final cart could not be fully reconciled"}. Report: ${paths.reportPath}`,
+        );
+        console.warn(
+          "Dedicated Chrome left open so you can inspect the cart. Close it before another run.",
+        );
       } else {
-        if (report.runStatus === "failed") {
-          leaveBrowserOpen = true;
-          console.error(
-            `Cart run failed: ${report.failureReason ?? "unknown failure"}. Report: ${paths.reportPath}`,
-          );
-          console.error(
-            "Dedicated Chrome left open so you can inspect the failed run. Close it before retrying.",
-          );
-        } else if (report.verificationStatus === "inconclusive") {
-          leaveBrowserOpen = true;
-          console.warn(
-            `Cart run ${report.runStatus}, but final verification was inconclusive: ${report.verificationNotes?.join(" ") ?? "the final cart could not be fully reconciled"}. Report: ${paths.reportPath}`,
-          );
-          console.warn(
-            "Dedicated Chrome left open so you can inspect the cart. Close it before another run.",
-          );
-        } else {
-          console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
-        }
-        exitCode = report.runStatus === "failed" ? 1 : 0;
+        console.log(`Cart run ${report.runStatus}: ${paths.reportPath}`);
       }
+      exitCode = report.runStatus === "failed" ? 1 : 0;
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       exitCode = 2;

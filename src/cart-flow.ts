@@ -85,6 +85,14 @@ export class CartNoMutationError extends Error {
   }
 }
 
+/** A mutation could not be correlated, but a full cart snapshot can safely seed the next item. */
+export class CartUnresolvedMutationError extends Error {
+  constructor(message: string, readonly snapshot: CartNetworkSnapshot) {
+    super(message);
+    this.name = "CartUnresolvedMutationError";
+  }
+}
+
 export class CartRunFatalError extends Error {}
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -218,6 +226,15 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
               snapshot = added;
             }
           } catch (error) {
+            if (error instanceof CartUnresolvedMutationError) {
+              cartUncertain = false;
+              names.set(candidate.id.toUpperCase(), candidate.productName);
+              latestSnapshot = error.snapshot;
+              cart = fromSnapshot(error.snapshot, names);
+              if (options.signal?.aborted) throw error;
+              results.push(failed(task, error.message));
+              break;
+            }
             if (!(error instanceof CartNoMutationError)) throw error;
             cartUncertain = false;
             rejected.push(error.message);

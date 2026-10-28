@@ -164,10 +164,7 @@ export interface CartReport {
   verificationStatus: "confirmed" | "inconclusive" | "not_run";
   requestSha256: string;
   authenticated: boolean;
-  deliveryModeConfirmed: boolean;
   wholeFoodsStorefrontConfirmed: boolean;
-  checkoutVisited: boolean;
-  settingsChanged: boolean;
   baselineCartCount: number;
   baselineItems: CartItemSnapshot[];
   finalCartCount: number;
@@ -199,10 +196,7 @@ export interface OwnedChromeSession {
 export interface AuthReport {
   runStatus: "completed" | "failed";
   authenticated: boolean;
-  deliveryModeConfirmed: boolean;
   wholeFoodsStorefrontConfirmed: boolean;
-  checkoutVisited: boolean;
-  settingsChanged: boolean;
   failureReason: string | null;
 }
 

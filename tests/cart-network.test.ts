@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import type { Response } from "playwright";
 import {
   CartNetworkObserver,
-  getSuccessfulFullCartPost,
+  getSuccessfulFullCartMutation,
   parseCartNetworkSnapshot,
 } from "../src/cart-network.js";
 
@@ -41,14 +41,41 @@ describe("parseCartNetworkSnapshot", () => {
     }) as unknown as Response;
     events.emit("response", response("GET", 200, { carts: [{ items: [] }] }));
     const getRecords = await observer.drain();
-    expect(getSuccessfulFullCartPost(getRecords)).toBeNull();
+    expect(getSuccessfulFullCartMutation(getRecords)).toBeNull();
 
-    events.emit("response", response("POST", 200, {
+    events.emit("response", response("PUT", 200, {
       carts: [{ items: [{ asin: "B012345678", quantity: 1 }] }],
     }));
-    const postRecords = await observer.waitForFullCartPost(50);
-    const snapshot = getSuccessfulFullCartPost(postRecords);
+    const mutationRecords = await observer.waitForFullCartMutation(50);
+    const snapshot = getSuccessfulFullCartMutation(mutationRecords);
     expect(snapshot?.items).toEqual([{ asin: "B012345678", quantity: 1 }]);
+    observer.dispose();
+  });
+
+  it("uses the latest queued POST or PUT snapshot for the selected ASIN", async () => {
+    const events = new EventEmitter();
+    const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
+    const response = (method: string, items: unknown[]): Response => ({
+      url: () => "https://www.wholefoodsmarket.com/api/wwos/cart",
+      request: () => ({ method: () => method }),
+      status: () => 200,
+      text: async () => JSON.stringify({ carts: [{ items }] }),
+    }) as unknown as Response;
+
+    await observer.beginMutation([{ asin: "BEANS", quantity: 0 }, { asin: "OTHER", quantity: 2 }]);
+    events.emit("response", response("POST", [
+      { asin: "BEANS", quantity: 1 },
+      { asin: "OTHER", quantity: 2 },
+    ]));
+    events.emit("response", response("PUT", [
+      { asin: "BEANS", quantity: 2 },
+      { asin: "OTHER", quantity: 1 },
+    ]));
+    await expect(observer.waitForMutation({ asin: "BEANS", expectedQuantity: 2, timeoutMs: 50 }))
+      .resolves.toMatchObject({ status: "confirmed", delta: 2, snapshot: { items: [
+        { asin: "BEANS", quantity: 2 },
+        { asin: "OTHER", quantity: 1 },
+      ] } });
     observer.dispose();
   });
 
@@ -128,7 +155,7 @@ describe("parseCartNetworkSnapshot", () => {
     observer.dispose();
   });
 
-  it("distinguishes a clean no-op from an unknown or unrelated cart effect", async () => {
+  it("confirms the selected ASIN increase despite unrelated cart changes", async () => {
     const events = new EventEmitter();
     const observer = new CartNetworkObserver(events as unknown as Pick<import("playwright").Page, "on" | "off">);
     const response = (items: unknown[]): Response => ({
@@ -139,17 +166,25 @@ describe("parseCartNetworkSnapshot", () => {
     }) as unknown as Response;
 
     await observer.beginMutation([{ asin: "A", quantity: 1 }]);
-    events.emit("response", response([{ asin: "A", quantity: 1 }]));
-    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 50 }))
-      .resolves.toMatchObject({ status: "no_mutation", delta: 0 });
-
-    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
     events.emit("response", response([
       { asin: "A", quantity: 2 },
       { asin: "B", quantity: 1 },
     ]));
     await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 50 }))
-      .resolves.toMatchObject({ status: "unknown", delta: 1 });
+      .resolves.toMatchObject({ status: "confirmed", delta: 1 });
+
+    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
+    events.emit("response", response([
+      { asin: "A", quantity: 1 },
+      { asin: "B", quantity: 1 },
+    ]));
+    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 20 }))
+      .resolves.toMatchObject({ status: "unknown", delta: 0, diagnostic: expect.stringContaining("not correlated") });
+
+    await observer.beginMutation([{ asin: "A", quantity: 1 }]);
+    events.emit("response", response([{ asin: "A", quantity: 1 }]));
+    await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 20 }))
+      .resolves.toMatchObject({ status: "unknown", delta: 0, diagnostic: expect.stringContaining("not correlated") });
 
     await observer.beginMutation([{ asin: "A", quantity: 1 }]);
     await expect(observer.waitForMutation({ asin: "A", expectedQuantity: 1, timeoutMs: 5 }))

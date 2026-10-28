@@ -18,7 +18,9 @@ they must not install software, start onboarding, or invoke another shopping run
   from this folder. Current onboarding supports macOS; report other platforms
   as unsupported instead of claiming the macOS browser flow will work there.
 - Check `node --version`, `npm --version`, `codex --version`, and the Chrome
-  executable. Node must be at least 22.16.0 and Codex CLI at least 0.154.0.
+  executable. Node must be at least 22.16.0. Model isolation was tested on
+  Codex CLI 0.160.0; other versions warn rather than being rejected solely
+  by version.
   Verify `codex exec --help` supports the flags used in `src/codex.ts` and
   `src/cart-decision.ts`; a version number alone is not a compatibility check.
 - Install missing prerequisites using official distributions and an existing
@@ -50,6 +52,9 @@ they must not install software, start onboarding, or invoke another shopping run
   Login success and offline tests do not prove model access. If a real model
   run rejects the configured model or CLI flags, report the precise limitation
   rather than silently editing defaults or retrying indefinitely.
+- Preserve the shared model isolation settings. If the CLI rejects them, report
+  the failure and use a compatible CLI; never retry with broader permissions.
+  The model subprocess restrictions do not constrain your coordinating session.
 
 ## 3. Connect the dedicated Whole Foods browser
 
@@ -58,11 +63,11 @@ For ingredients-only requests, skip this section and keep Chrome closed.
 1. Run `npm run cart -- attachment-check`. It checks owned Chrome/CDP startup
    against Example Domain without invoking a model or touching the cart.
 2. Run `npm run login`. Let the user sign in to their Whole Foods account, set
-   their own delivery address, select delivery mode, and open the storefront.
+   their own delivery address, and open the storefront.
    Example names, ZIP codes, and stores are not required account settings.
 3. Have the user close the dedicated browser, then run `npm run auth-check`.
-   This checks authentication and delivery context without model calls or cart
-   mutations. If it leaves Chrome open for correction, let the user fix the
+   This checks authentication and storefront context without model calls or
+   cart mutations. If it leaves Chrome open for correction, let the user fix the
    context, close the window, and retry.
 
 Use only `~/.whole-foods-cart/chrome-profile` or the explicitly configured

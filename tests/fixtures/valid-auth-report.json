@@ -1,9 +1,6 @@
 {
   "runStatus": "completed",
   "authenticated": true,
-  "deliveryModeConfirmed": true,
   "wholeFoodsStorefrontConfirmed": true,
-  "checkoutVisited": false,
-  "settingsChanged": false,
   "failureReason": null
 }

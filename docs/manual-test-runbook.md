@@ -39,20 +39,17 @@ the same owned Chrome profile and localhost CDP endpoint.
 - Confirm `.wfm-cart.lock` is absent at the repository root.
 - Do not browse the storefront in this gate.
 
-### Delivery-context check
+### Authentication check
 
 - Run `npm run auth-check`.
 - Confirm authentication comes from `/api/account/summary` field
   `customer.authenticated`, not presentation text in the page header or body.
-- Confirm `authenticated`, `deliveryModeConfirmed`, and
-  `wholeFoodsStorefrontConfirmed` are true. Readiness does not inspect or
-  require visible address text.
-- Confirm `checkoutVisited` and `settingsChanged` are false.
-- If authentication or delivery context is not ready, confirm the CLI prints the
+- Confirm `authenticated` and `wholeFoodsStorefrontConfirmed` are true.
+- If authentication or storefront readiness fails, confirm the CLI prints the
   reason and leaves the dedicated Chrome window open. Sign in or correct the
   context there, close Chrome normally, and rerun `npm run auth-check`.
-- Treat authentication and delivery context as readiness checks. The safety
-  checks are the checkout and account/settings boundaries.
+- The auth report contains only authentication and storefront readiness; safety
+  boundaries continue to be enforced by the navigation guard and supervised UI.
 
 ### Supervised harness smoke
 
@@ -65,9 +62,7 @@ the same owned Chrome profile and localhost CDP endpoint.
 npm run cart-build -- runs/three-item-smoke.json
 ```
 
-- Stop immediately on checkout, payment, order, or account-setting pages. If
-  the delivery context changes or cannot be established, stop the build and
-  return a failed report.
+- Stop immediately on checkout, payment, order, or account-setting pages.
 - Confirm the run created one confirmed harness decision per requested ingredient.
   The browser session remains the same while decisions stay browser-tool-free.
 - Confirm the final structured cart check records product IDs, names, and
