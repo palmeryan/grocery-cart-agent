@@ -95,11 +95,11 @@ describe("Ingredients Agent deterministic compiler", () => {
     expect(list.ingredients?.map(({ purchaseRequirement }) => purchaseRequirement?.total)).toEqual([
       chosen(2, "800 g / 28 oz can"), chosen(3, "425 g / 15 oz can"),
     ]);
-    expect(() => compileRecipeCompilation({ recipes: [{ sourceName: "dinner.md", ingredients: [
+    expect(compileRecipeCompilation({ recipes: [{ sourceName: "dinner.md", ingredients: [
       line("2 × 800 g / 28 oz cans tomatoes", "canned tomatoes", {
         amount: amount("2 × 800 g / 28 oz cans", quantity(2, "can"), chosen(2, "can")),
       }),
-    ] }] })).toThrow(/Package size omitted/);
+    ] }] }).purchaseIntents[0]?.additiveAmount).toEqual(chosen(2, "can"));
   });
 
   it("combines source-supported approximate equivalents", () => {
@@ -148,13 +148,14 @@ describe("Ingredients Agent deterministic compiler", () => {
     expect(list.ingredients?.[0]?.purchaseRequirement?.total).toEqual(chosen(1, "tomato"));
   });
 
-  it("rejects incompatible chosen units instead of emitting a missing total", () => {
-    expect(() => compileRecipeCompilation({ recipes: [
+  it("keeps incompatible units in separate shopping intents", () => {
+    const plan = compileRecipeCompilation({ recipes: [
       { sourceName: "a.md", ingredients: [line("mint for serving", "fresh mint")] },
       { sourceName: "b.md", ingredients: [line("½ cup mint", "fresh mint", {
         amount: amount("½ cup", quantity(0.5, "cup")),
       })] },
-    ] })).toThrow(/incompatible shopping units/i);
+    ] });
+    expect(plan.purchaseIntents.map(({ additiveAmount }) => additiveAmount.unit)).toEqual(["pinch", "cup"]);
   });
 
   it("derives intent IDs from source membership rather than model wording", () => {
@@ -225,7 +226,7 @@ describe("Ingredients Agent deterministic compiler", () => {
 });
 
 describe("recipe-document compiler seam", () => {
-  it("validates exact recipe and line provenance", async () => {
+  it("accepts changed recipe names and reconstructed ingredient text", async () => {
     const documents = [{ sourceName: "one.md", text: "2 apples" }];
     const shoppingList = await compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "one.md",
@@ -242,17 +243,17 @@ describe("recipe-document compiler seam", () => {
     expect(task.recipeContext).toEqual([{ name: "one.md", text: "2 apples" }]);
     expect(renderDecisionPrompt({
       task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, purchaseRequirement: task.ingredient.purchaseRequirement },
-      recipeContext: task.recipeContext, candidates: [], currentCart: [],
+      recipeContext: task.recipeContext, candidates: [],
     })).toContain('"text": "2 apples"');
 
     await expect(compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "renamed.md",
       ingredients: [line("2 apples", "apple")],
-    }] }))).rejects.toThrow(/sources do not match/);
+    }] }))).resolves.toMatchObject({ ingredients: [{ request: "apple" }], sourceRecipes: [{ sourceName: "Combined recipes", text: "one.md\n2 apples" }] });
     await expect(compileIngredientsList(documents, async () => ({ recipes: [{
       sourceName: "one.md",
       ingredients: [line("apples", "apple")],
-    }] }))).rejects.toThrow(/complete verbatim line/);
+    }] }))).resolves.toMatchObject({ ingredients: [{ request: "apple" }] });
   });
 
   it("rejects empty recipe input before invoking the agent", async () => {

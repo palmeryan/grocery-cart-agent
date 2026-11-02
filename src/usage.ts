@@ -67,10 +67,16 @@ export interface UsageSummary {
   };
 }
 
-const PRICING_AS_OF = "2026-09-15";
+const PRICING_AS_OF = "2026-10-31";
 const PRICING_SOURCE =
   "https://developers.openai.com/api/docs/models";
 const MODEL_PRICES: Record<string, ListPrice> = {
+  "gpt-6.1-terra": {
+    uncached_input_per_million_usd: 1,
+    cached_input_per_million_usd: 0.05,
+    cache_write_surcharge_per_million_usd: 0.25,
+    output_per_million_usd: 5,
+  },
   "gpt-5.6-terra": {
     uncached_input_per_million_usd: 2,
     cached_input_per_million_usd: 0.2,

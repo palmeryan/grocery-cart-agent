@@ -58,14 +58,13 @@ export interface CartFlowOptions {
   tasks: readonly CartTask[];
   baseline: readonly CartItemSnapshot[];
   search(query: string): Promise<ProductCandidate[]>;
-  decide(task: CartTask, candidates: readonly ProductCandidate[], cart: readonly CartItemSnapshot[]): Promise<CartDecision>;
+  decide(task: CartTask, candidates: readonly ProductCandidate[]): Promise<CartDecision>;
   add(
     task: CartTask,
     candidate: ProductCandidate,
     quantity: number,
     option: string | null,
     before: readonly CartNetworkItem[],
-    cart: readonly CartItemSnapshot[],
     recordAdditionalDecision: (durationMs: number) => void,
   ): Promise<CartNetworkSnapshot | { snapshot: CartNetworkSnapshot; quantity: number; reason: string | null }>;
   onProgress?(progress: CartFlowProgress): void | Promise<void>;
@@ -163,7 +162,7 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
         const decisionStarted = now();
         modelCalls += 1;
         let decision: CartDecision;
-        try { decision = await options.decide(task, candidates, cart); }
+        try { decision = await options.decide(task, candidates); }
         finally { decisionMs += now() - decisionStarted; }
         if (decision.action === "search_again") {
           if (searchCount > 0) throw new Error("Decision requested more than one revised search");
@@ -176,19 +175,6 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
             status: "skipped", productName: null, productId: null, packageSize: null,
             quantity: 0, price: null, rationale: decision.reason,
             confidence: "medium", failureReason: decision.reason,
-          });
-          break;
-        }
-        if (decision.action === "already_present") {
-          const existing = cart.find((item) => item.productId?.toUpperCase() === decision.cartProductId.toUpperCase());
-          if (!existing) throw new Error(`Existing cart product ${decision.cartProductId} was not observed`);
-          results.push({
-            ingredientId: task.ingredient.id, requested: task.ingredient.request,
-            status: "already_present", productName: existing.productName,
-            productId: existing.productId ?? null, packageSize: null,
-            quantity: Number.isSafeInteger(existing.quantity) ? existing.quantity : 1,
-            price: null, rationale: "Product was already in the cart.",
-            confidence: "medium", failureReason: null,
           });
           break;
         }
@@ -213,7 +199,7 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
           let snapshot: CartNetworkSnapshot;
           let finalReason = selection.reason;
           try {
-            const added = await options.add(task, candidate, selection.quantity, selection.option, before, cart, (durationMs) => {
+            const added = await options.add(task, candidate, selection.quantity, selection.option, before, (durationMs) => {
               modelCalls += 1;
               decisionMs += durationMs;
               additionalDecisionMs += durationMs;
@@ -251,7 +237,7 @@ export async function runCartFlow(options: CartFlowOptions): Promise<CartFlowRes
             const retryDecisionStarted = now();
             modelCalls += 1;
             let retry: CartDecision;
-            try { retry = await options.decide(task, alternatives, cart); }
+            try { retry = await options.decide(task, alternatives); }
             catch (decisionError) {
               if (options.signal?.aborted) throw decisionError;
               results.push(skipped(task, `${rejected.join(" ")} Alternate selection failed: ${errorText(decisionError)}`));

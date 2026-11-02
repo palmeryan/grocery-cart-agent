@@ -5,14 +5,13 @@
   "description": "One bounded product decision. It is not a claim that a cart mutation occurred.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["action", "candidateId", "quantity", "option", "query", "cartProductId", "reason"],
+  "required": ["action", "candidateId", "quantity", "option", "query", "reason"],
   "properties": {
-    "action": { "type": "string", "enum": ["select", "search_again", "already_present", "skip"] },
+    "action": { "type": "string", "enum": ["select", "search_again", "skip"] },
     "candidateId": { "type": ["string", "null"], "minLength": 1 },
     "quantity": { "type": "integer", "minimum": 0 },
     "option": { "type": ["string", "null"], "minLength": 1 },
     "query": { "type": ["string", "null"], "minLength": 1 },
-    "cartProductId": { "type": ["string", "null"], "minLength": 1 },
     "reason": { "type": ["string", "null"], "minLength": 1 }
   }
 }

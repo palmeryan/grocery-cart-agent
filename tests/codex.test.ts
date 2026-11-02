@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   writeFileSync,
@@ -16,6 +17,7 @@ import {
   createKillEscalation,
   runCodex,
 } from "../src/codex.js";
+import { assessModelToolInventory, buildModelToolProbeInvocation, MODEL_TOOL_PROBE_PROMPT, parseModelToolTrace } from "../src/model-tool-probe.js";
 
 const processAlive = (pid: number): boolean => {
   try {
@@ -27,6 +29,76 @@ const processAlive = (pid: number): boolean => {
 };
 
 describe("Codex invocation", () => {
+  it("only auto-clears exact tool names mapped to disabled settings present in the invocation", () => {
+    const invocation = buildModelToolProbeInvocation({
+      rootDir: "/repo", workDir: "/repo/runs/probe/model-work", outputPath: "/repo/out",
+    });
+    const args = invocation.args.join(" ");
+    const mapped = assessModelToolInventory({ visibleTools: [
+      "functions.exec", "functions.wait", "collaboration.spawn_agent",
+    ], traceFiles: 1 });
+    expect(mapped.status).toBe("covered");
+    expect(mapped.covered).toEqual([
+      { name: "collaboration.spawn_agent", settings: ["agents.enabled=false", "features.multi_agent=false"] },
+      { name: "functions.exec", settings: ["features.code_mode_host=false"] },
+      { name: "functions.wait", settings: ["features.code_mode_host=false"] },
+    ]);
+    for (const { settings } of mapped.covered) for (const setting of settings) expect(args).toContain(setting);
+
+    expect(assessModelToolInventory({
+      visibleTools: ["functions.request_user_input", "functions.exec.new"], traceFiles: 1,
+    })).toEqual({ status: "warning", uncovered: ["functions.exec.new", "functions.request_user_input"], covered: [] });
+    expect(assessModelToolInventory(null).status).toBe("warning");
+    expect(assessModelToolInventory({ visibleTools: [], traceFiles: 1 }).status).toBe("covered");
+  });
+
+  it("probes the model with the same restrictions and no user data", () => {
+    const invocation = buildModelToolProbeInvocation({
+      rootDir: "/repo", workDir: "/repo/runs/probe/model-work",
+      outputPath: "/repo/runs/probe/inventory.json",
+    });
+    const joined = invocation.args.join(" ");
+    expect(joined).toContain('permissions.wfm-model.extends=":read-only"');
+    expect(joined).toContain('permissions.wfm-model.network.enabled=false');
+    expect(joined).toContain('agents.enabled=false');
+    expect(joined).toContain("features.shell_tool=false");
+    expect(joined).not.toContain("--output-schema");
+    expect(joined).not.toContain("--output-last-message");
+    expect(MODEL_TOOL_PROBE_PROMPT).toContain("ready");
+  });
+
+  it("extracts tool names and additional tool namespaces from captured inference requests", () => {
+    const traceRoot = mkdtempSync(join(tmpdir(), "wfm-trace-"));
+    const traceDir = join(traceRoot, "session-a");
+    mkdirSync(traceDir, { recursive: true });
+    const payloadPath = join(traceDir, "request.json");
+    writeFileSync(payloadPath, JSON.stringify({ input: [
+      { type: "function", name: "search" },
+      { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [{ name: "exec" }, { name: "read" }] }] },
+    ] }));
+    writeFileSync(join(traceDir, "trace.jsonl"), JSON.stringify({
+      payload: { type: "inference_started", request_payload: { path: "request.json" } },
+    }));
+    // Tool-looking metadata in other trace files is not an inference inventory.
+    writeFileSync(join(traceRoot, "other.json"), JSON.stringify({ tools: [{ name: "false-positive" }] }));
+    expect(parseModelToolTrace(traceRoot)).toEqual({
+      visibleTools: ["functions.exec", "functions.read", "search"], traceFiles: 1,
+    });
+  });
+
+  it("treats a referenced Responses Lite request with no additional_tools as empty, and missing references as inconclusive", () => {
+    const emptyRoot = mkdtempSync(join(tmpdir(), "wfm-trace-empty-"));
+    const payloadPath = join(emptyRoot, "request.json");
+    writeFileSync(payloadPath, JSON.stringify({ input: [{ type: "message", role: "user", content: "ready" }] }));
+    writeFileSync(join(emptyRoot, "trace.jsonl"), JSON.stringify({
+      type: "inference_started", request_payload: { path: payloadPath },
+    }));
+    expect(parseModelToolTrace(emptyRoot)).toEqual({ visibleTools: [], traceFiles: 1 });
+    const missingRoot = mkdtempSync(join(tmpdir(), "wfm-trace-missing-"));
+    writeFileSync(join(missingRoot, "trace.jsonl"), JSON.stringify({ type: "turn.completed", tools: [{ name: "not-a-request" }] }));
+    expect(() => parseModelToolTrace(missingRoot)).toThrow(/inconclusive/);
+  });
+
   it("builds a restricted invocation with no project-file grants", () => {
     const invocation = buildIngredientsAgentInvocation({
       rootDir: "/repo",
@@ -101,12 +173,13 @@ describe("Codex process", () => {
     try {
       const result = await runCodex({
         executable: process.execPath,
-        args: ["-e", "process.stdout.write(JSON.stringify({secret:process.env.WFM_TEST_PRIVATE_SECRET ?? null}));"],
+        args: ["-e", "process.stdout.write(JSON.stringify({secret:process.env.WFM_TEST_PRIVATE_SECRET ?? null,trace:process.env.CODEX_ROLLOUT_TRACE_ROOT ?? null}));"],
         prompt: "", eventsPath: join(runDir, "events.jsonl"),
         stderrPath: join(runDir, "stderr.log"), timeoutMs: 5_000,
+        rolloutTraceRoot: join(runDir, "trace"),
       });
       expect(result.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(join(runDir, "events.jsonl"), "utf8"))).toEqual({ secret: null });
+      expect(JSON.parse(readFileSync(join(runDir, "events.jsonl"), "utf8"))).toEqual({ secret: null, trace: join(runDir, "trace") });
     } finally {
       vi.unstubAllEnvs();
     }

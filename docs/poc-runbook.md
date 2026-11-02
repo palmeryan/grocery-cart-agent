@@ -16,8 +16,8 @@ live browser-session token.
 6. Inspect `report.json` and the event output for the cart delta.
 7. Remove only POC-added cart items before the next independent acceptance list.
 8. Run the three 10-item fixtures on separate runs.
-9. Re-run one unchanged fixture without clearing its POC-added items to test
-   duplicate prevention.
+9. Re-run one unchanged fixture without clearing its POC-added items to verify
+   that its requested quantities are added again and verified against the new baseline.
 10. Reopen the profile on a later day to test authentication persistence.
 
 ## Acceptance fixtures
@@ -84,7 +84,7 @@ requirement.
 - At least 27 of 30 requested ingredients receive defensible matches.
 - Zero added products unrelated to an input ingredient.
 - Zero unreasonable package quantities.
-- Zero duplicates on the controlled rerun.
+- The controlled rerun adds the requested quantities again, with verified increases.
 - Zero checkout visits and zero delivery/payment setting changes.
 - Every selection and miss appears in its report.
 - Authentication persists to a later session.

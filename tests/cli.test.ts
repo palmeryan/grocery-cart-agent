@@ -26,6 +26,10 @@ const inspection = (items: { productName: string; productId?: string; quantity: 
   url: "https://www.wholefoodsmarket.com/grocery/cart", bodyText: "cart",
   extractionStatus: "complete" as const, extractionDiagnostic: null,
 });
+const modelPreflight = {
+  probeModelTools: async () => ({ visibleTools: ["shell"], traceFiles: 1 }),
+  confirmModelTools: async () => true,
+};
 
 describe("cart CLI", () => {
   it("parses model and effort overrides", () => {
@@ -38,6 +42,84 @@ describe("cart CLI", () => {
   it("supports the diagnostic commands", () => {
     expect(parseCommand(["auth-check"])).toEqual({ command: "auth-check" });
     expect(parseCommand(["attachment-check"])).toEqual({ command: "attachment-check" });
+  });
+
+  it("preflights the ingredients and cart model settings before starting recipe compilation", async () => {
+    const { root } = setup();
+    const recipePath = join(root, "recipe.md");
+    writeFileSync(recipePath, "Soup\n");
+    const probes: { model: string; reasoningEffort: string }[] = [];
+    let ingredientsStarted = false;
+    const exitCode = await runCli(["shopper-helper", recipePath, "--model", "cart-model", "--effort", "low"], {
+      rootDir: root, env: env(root),
+      probeModelTools: async ({ model, reasoningEffort }) => {
+        probes.push({ model, reasoningEffort });
+        return { visibleTools: [], traceFiles: 1 };
+      },
+      confirmModelTools: async () => true,
+      runIngredients: async () => {
+        ingredientsStarted = true;
+        throw new Error("Compilation should stop before review");
+      },
+    });
+    expect(exitCode).toBe(1);
+    expect(probes).toEqual([
+      { model: "gpt-6.1-terra", reasoningEffort: "medium" },
+      { model: "cart-model", reasoningEffort: "low" },
+    ]);
+    expect(ingredientsStarted).toBe(true);
+  });
+
+  it("stops before any recipe model call when the tool inventory is declined", async () => {
+    const { root } = setup();
+    const recipePath = join(root, "recipe.md");
+    writeFileSync(recipePath, "Soup\n");
+    let ingredientsStarted = false;
+    const exitCode = await runCli(["ingredients", recipePath], {
+      rootDir: root, env: env(root),
+      probeModelTools: async () => ({ visibleTools: ["shell"], traceFiles: 1 }),
+      confirmModelTools: async () => false,
+      runIngredients: async () => {
+        ingredientsStarted = true;
+        throw new Error("Must not compile after decline");
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(ingredientsStarted).toBe(false);
+  });
+
+  it("continues without a prompt for tools covered by disabled settings", async () => {
+    const { root } = setup();
+    const recipePath = join(root, "recipe.md");
+    writeFileSync(recipePath, "Soup\\n");
+    let ingredientsStarted = false;
+    const exitCode = await runCli(["ingredients", recipePath], {
+      rootDir: root, env: env(root),
+      probeModelTools: async () => ({ visibleTools: ["functions.exec", "collaboration.spawn_agent"], traceFiles: 1 }),
+      runIngredients: async () => {
+        ingredientsStarted = true;
+        throw new Error("stop after verifying preflight");
+      },
+    });
+    expect(exitCode).toBe(1);
+    expect(ingredientsStarted).toBe(true);
+  });
+
+  it("stops in a non-interactive run when a tool has no disabled-setting mapping", async () => {
+    const { root } = setup();
+    const recipePath = join(root, "recipe.md");
+    writeFileSync(recipePath, "Soup\\n");
+    let ingredientsStarted = false;
+    const exitCode = await runCli(["ingredients", recipePath], {
+      rootDir: root, env: env(root),
+      probeModelTools: async () => ({ visibleTools: ["functions.request_user_input"], traceFiles: 1 }),
+      runIngredients: async () => {
+        ingredientsStarted = true;
+        throw new Error("must stop before model call");
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(ingredientsStarted).toBe(false);
   });
 
   it("parses the ingredients-only command", () => {
@@ -68,6 +150,7 @@ describe("cart CLI", () => {
     const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const cancelled = await runCli(["shopper-helper"], {
       rootDir: root, env: env(root),
+      ...modelPreflight,
       enterRecipes: async () => null,
       runIngredients: async () => { throw new Error("Ingredients Agent must not start after cancel"); },
       launchBrowser: async () => { browserLaunched = true; throw new Error("Browser must not launch"); },
@@ -76,6 +159,7 @@ describe("cart CLI", () => {
     expect(existsSync(join(root, "runs"))).toBe(false);
     const exitCode = await runCli(["shopper-helper"], {
       rootDir: root, env: env(root),
+      ...modelPreflight,
       enterRecipes: async () => documents,
       runIngredients: async (input) => {
         received = input.documents;
@@ -98,6 +182,7 @@ describe("cart CLI", () => {
     const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const exitCode = await runCli(["shopper-helper", recipePath], {
       rootDir: root, env: env(root),
+      ...modelPreflight,
       runIngredients: async () => ({
         shoppingList: { ingredients: [{ id: "chicken", request: "Chicken thighs" }] }, recipeCompilation: {},
       }) as Awaited<ReturnType<typeof runIngredientsAgent>>,
@@ -123,6 +208,7 @@ describe("cart CLI", () => {
     let launched = false;
     await runCli(["shopper-helper", recipePath], {
       rootDir: root, env: env(root),
+      ...modelPreflight,
       runIngredients: async () => ({
         shoppingList: { ingredients: [
           { id: "apples", request: "Apples" }, { id: "bread", request: "Bread" },
@@ -169,6 +255,7 @@ describe("cart CLI", () => {
     let inspections = 0;
     const exitCode = await runCli(["build", request], {
       rootDir: root, env: env(root),
+      ...modelPreflight,
       reservePort: async () => 45678,
       launchBrowser: async () => ({ pid: 1, stop: async () => ({ stopped: true, remainingProfilePids: [] }) }),
       runDeterministicCheck: async () => auth(),
@@ -196,6 +283,7 @@ describe("cart CLI", () => {
     const { root, request } = setup();
     const exitCode = await runCli(["build", request], {
       rootDir: root, env: env(root), reservePort: async () => 45678,
+      ...modelPreflight,
       launchBrowser: async () => ({ pid: 1, stop: async () => ({ stopped: true, remainingProfilePids: [] }) }),
       runDeterministicCheck: async () => auth(), inspectCart: async () => inspection([]),
       runCartItems: async ({ tasks }) => ({ total: tasks.length, completed: 0, results: [], timings: [], stopped: true, stopReason: "decision: no defensible choice", latestSnapshot: null, failure: { task: tasks[0]!, stage: "decision", reason: "decision: no defensible choice", mayHaveCommitted: false, candidate: null, quantity: null } }),

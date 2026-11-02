@@ -78,13 +78,6 @@ const exactQuantityForOutput = (quantity: ShoppingQuantity): ShoppingQuantity =>
 };
 
 const amountForOutput = (amount: RecipeIngredientAmount): RecipeIngredientAmount => {
-  const sizedPackage = /\b\d+(?:\.\d+)?\s*-?\s*(?:g|kg|oz|ounces?|lb|pounds?)\b/i.test(amount.raw) &&
-    /\b(?:cans?|bags?|jars?|bottles?|cartons?|boxes?)\b/i.test(amount.raw);
-  const genericPackage = /^(?:cans?|bags?|jars?|bottles?|cartons?|boxes?)$/i;
-  if (sizedPackage && (!amount.sourceQuantity || genericPackage.test(amount.sourceQuantity.unit) ||
-      genericPackage.test(amount.additiveQuantity.unit))) {
-    throw new Error(`Package size omitted from ingredient quantity: ${amount.raw}`);
-  }
   return {
     raw: amount.raw,
     sourceQuantity: amount.sourceQuantity === null ? null : quantityForOutput(amount.sourceQuantity),
@@ -97,7 +90,6 @@ const combineQuantities = (
 ): ShoppingQuantity => {
   if (quantities.length === 0) throw new Error("Shopping quantity is missing");
   const units = quantities.map(({ unit }) => canonicalUnit(unit));
-  if (!units.every((unit) => unit === units[0])) throw new Error(`Incompatible shopping units: ${units.join(", ")}`);
   return {
     quantity: quantities.reduce((sum, value) => sum + value.quantity, 0),
     unit: /\d/.test(quantities[0]?.unit ?? "") ? compact(quantities[0]!.unit) : units[0] ?? "",
@@ -218,7 +210,9 @@ export function compileRecipeCompilation(
   const groups = new Map<string, CompiledLine[]>();
   for (const recipe of compiledRecipes) {
     for (const line of recipe.ingredients) {
-      const key = normalizedItemKey(line.name);
+      // Keep incompatible quantities in separate intents. The cart model can
+      // still satisfy each request, while the compiler never adds unlike units.
+      const key = `${normalizedItemKey(line.name)}\u0000${canonicalUnit(line.amount.additiveQuantity.unit)}`;
       const group = groups.get(key) ?? [];
       group.push({ recipe, line });
       groups.set(key, group);

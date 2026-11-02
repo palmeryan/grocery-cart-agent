@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createInterface } from "node:readline/promises";
 import type { Browser, Page } from "playwright";
 import {
   canonicalShoppingList,
@@ -70,12 +71,12 @@ import type {
   AttachmentReport,
   AuthReport,
   CartItemResult,
-  CartItemSnapshot,
   OwnedChromeSession,
   RunPaths,
   ShoppingList,
 } from "./types.js";
 import { writeUsageSummary } from "./usage.js";
+import { assessModelToolInventory, buildModelToolProbeInvocation, MODEL_TOOL_PROBE_PROMPT, parseModelToolTrace, type ModelToolInventory } from "./model-tool-probe.js";
 
 type CommandKind = RunPaths["kind"];
 
@@ -103,6 +104,8 @@ interface CliDependencies {
     session: OwnedChromeSession,
   ) => Promise<AuthReport | AttachmentReport>;
   releaseLock?: (lock: RunLock) => void;
+  probeModelTools?: (input: { model: string; reasoningEffort: ReasoningEffort; traceRoot: string; workDir: string; outputPath: string; rootDir: string; executable: string; timeoutMs: number; signal?: AbortSignal }) => Promise<ModelToolInventory>;
+  confirmModelTools?: (reports: readonly { model: string; reasoningEffort: ReasoningEffort; inventory: ModelToolInventory | null; error?: string }[]) => Promise<boolean>;
 }
 
 export interface SignalHandlerOptions {
@@ -200,6 +203,87 @@ export async function withCliSignalHandlers<T>(
       processObject.off(signal, onSignal);
     }
   }
+}
+
+type ModelToolPreflightReport = {
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  inventory: ModelToolInventory | null;
+  error?: string;
+};
+
+async function confirmModelToolPreflight(
+  reports: readonly ModelToolPreflightReport[],
+): Promise<boolean> {
+  let requiresReview = false;
+  for (const report of reports) {
+    console.log(`\nModel tool preflight: ${report.model} (effort ${report.reasoningEffort})`);
+    const assessment = assessModelToolInventory(report.inventory);
+    if (report.inventory) {
+      console.log(report.inventory.visibleTools.length
+        ? `Tools in captured inference request: ${report.inventory.visibleTools.join(", ")}`
+        : "Tools in captured inference request: none");
+      console.log(`Captured trace files: ${report.inventory.traceFiles}`);
+      if (assessment.covered.length) {
+        console.log(`Known tools have matching disabled settings: ${assessment.covered.map(({ name, settings }) => `${name} (${settings.join(" + ")})`).join(", ")}`);
+      }
+      if (assessment.uncovered.length) {
+        requiresReview = true;
+        console.log(`Uncovered tool names require review: ${assessment.uncovered.join(", ")}`);
+      }
+    } else {
+      requiresReview = true;
+      console.log(`Inventory inconclusive: ${report.error ?? "no trace inventory available"}`);
+      console.log("The available tools are unknown; continuing requires an explicit decision.");
+    }
+  }
+  if (!requiresReview) return true;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error("Model tool preflight found uncovered or unknown tools and requires an interactive confirmation. Re-run in a terminal to review the inventory and continue.");
+    return false;
+  }
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await readline.question("Continue to the model run? [y/N] ");
+    return /^y(es)?$/i.test(answer.trim());
+  } finally {
+    readline.close();
+  }
+}
+
+async function runModelToolPreflight(
+  reports: readonly { model: string; reasoningEffort: ReasoningEffort }[],
+  input: { rootDir: string; runsDir: string; executable: string; timeoutMs: number; signal?: AbortSignal },
+  dependencies: CliDependencies,
+  beforeConfirm: () => void,
+): Promise<boolean> {
+  const unique = [...new Map(reports.map((report) => [`${report.model}\0${report.reasoningEffort}`, report])).values()];
+  const results: ModelToolPreflightReport[] = [];
+  for (const [index, report] of unique.entries()) {
+    const stamp = `${new Date().toISOString().replaceAll(":", "-").replace(".", "-")}-${index}`;
+    const runDir = join(input.runsDir, `model-tool-preflight-${stamp}`);
+    const traceRoot = join(runDir, "rollout-trace");
+    const workDir = join(runDir, "model-work");
+    const outputPath = join(runDir, "probe-output.txt");
+    mkdirSync(traceRoot, { recursive: true, mode: 0o700 });
+    mkdirSync(workDir, { recursive: true, mode: 0o700 });
+    try {
+      let inventory: ModelToolInventory;
+      if (dependencies.probeModelTools) {
+        inventory = await dependencies.probeModelTools({ ...report, traceRoot, workDir, outputPath, rootDir: input.rootDir, executable: input.executable, timeoutMs: input.timeoutMs, ...(input.signal ? { signal: input.signal } : {}) });
+      } else {
+        const invocation = buildModelToolProbeInvocation({ rootDir: input.rootDir, workDir, outputPath, ...report });
+        const result = await runCodex({ executable: input.executable, args: invocation.args, workDir: invocation.workDir, prompt: MODEL_TOOL_PROBE_PROMPT, eventsPath: join(runDir, "codex-events.jsonl"), stderrPath: join(runDir, "codex-stderr.log"), timeoutMs: input.timeoutMs, rolloutTraceRoot: traceRoot, ...(input.signal ? { signal: input.signal } : {}) });
+        if (result.timedOut || result.exitCode !== 0) throw new Error(`probe exited ${result.exitCode}${result.signal ? ` (${result.signal})` : ""}`);
+        inventory = parseModelToolTrace(traceRoot);
+      }
+      results.push({ ...report, inventory });
+    } catch (error) {
+      results.push({ ...report, inventory: null, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  beforeConfirm();
+  return await (dependencies.confirmModelTools ?? confirmModelToolPreflight)(results);
 }
 
 export const parseCommand = (
@@ -450,6 +534,25 @@ export async function runCli(
       }
     }
     const config = loadConfig(dependencies.env ?? process.env, rootDir);
+    if (parsed.command === "build" || parsed.command === "shopper-helper" || parsed.command === "ingredients") {
+      const models = [
+        ...(parsed.command !== "build" ? [{ model: INGREDIENTS_AGENT_MODEL, reasoningEffort: INGREDIENTS_AGENT_REASONING_EFFORT }] : []),
+        ...(parsed.command !== "ingredients" ? [{ model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort }] : []),
+      ];
+      status("Checking model-visible tools before sending task data");
+      const confirmed = await runModelToolPreflight(models, {
+        rootDir,
+        runsDir: config.runsDir,
+        executable: config.codexBin,
+        timeoutMs: config.maxRunMs,
+        ...(dependencies.signal ? { signal: dependencies.signal } : {}),
+      }, dependencies, pauseProgress);
+      pauseProgress();
+      if (!confirmed || dependencies.signal?.aborted) {
+        console.log(dependencies.signal?.aborted ? "Model tool preflight cancelled." : "Model run cancelled after tool preflight.");
+        return dependencies.signal?.aborted ? 1 : 0;
+      }
+    }
     if (parsed.command === "ingredients-review") {
       const inputPath = resolve(parsed.shoppingListPath!);
       const list = loadShoppingList(inputPath);
@@ -852,7 +955,7 @@ export async function runCli(
         cartNetworkObserver = new CartNetworkObserver(shoppingPage);
         const decisionAttempts = new Map<string, number>();
         let networkDiagnosticCount = 0;
-        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, cart: readonly CartItemSnapshot[], quantityOptions?: readonly QuantityOption[], selectedPackSize?: string | null) => {
+        const decide = async (task: ReturnType<typeof cartTasks>[number], candidates: Awaited<ReturnType<typeof searchProducts>>, quantityOptions?: readonly QuantityOption[], selectedPackSize?: string | null) => {
           status(`Choosing a product for ${task.ingredient.request}`);
           const itemDir = join(paths!.runDir, "cart-decision", task.ingredient.id);
           mkdirSync(itemDir, { recursive: true, mode: 0o700 });
@@ -860,9 +963,9 @@ export async function runCli(
           decisionAttempts.set(task.ingredient.id, attempt);
           const outputPath = join(itemDir, `decision-${attempt}.json`);
           const invocation = buildDecisionInvocation({ rootDir, workDir: join(paths!.runDir, "model-work"), outputPath, schemaPath: join(rootDir, DECISION_SCHEMA_PATH), model: cartDecisionModel, reasoningEffort: cartDecisionReasoningEffort });
-          const result = await runCodex({ executable: config.codexBin, args: invocation.args, workDir: invocation.workDir, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null, ...(task.ingredient.purchaseRequirement ? { purchaseRequirement: task.ingredient.purchaseRequirement } : {}) }, recipeContext: task.recipeContext, candidates, currentCart: cart, ...(quantityOptions ? { quantityOptions, selectedPackSize: selectedPackSize ?? null } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
+          const result = await runCodex({ executable: config.codexBin, args: invocation.args, workDir: invocation.workDir, prompt: renderDecisionPrompt({ task: { ingredientId: task.ingredient.id, requested: task.ingredient.request, ...(task.ingredient.preferences ? { preferences: task.ingredient.preferences } : {}), context: task.ingredient.context ?? null, ...(task.ingredient.purchaseRequirement ? { purchaseRequirement: task.ingredient.purchaseRequirement } : {}) }, recipeContext: task.recipeContext, candidates, ...(quantityOptions ? { quantityOptions, selectedPackSize: selectedPackSize ?? null } : {}) }), eventsPath: join(itemDir, `codex-events-${attempt}.jsonl`), stderrPath: join(itemDir, `codex-stderr-${attempt}.log`), timeoutMs: config.maxRunMs, ...(signal ? { signal } : {}) });
           if (result.exitCode !== 0 || result.timedOut) throw new Error("Cart decision Codex invocation failed");
-          return parseAndValidateDecision(readFileSync(outputPath, "utf8"), candidates, cart);
+          return parseAndValidateDecision(readFileSync(outputPath, "utf8"), candidates);
         };
         flow = await runCartFlow({
           tasks,
@@ -873,7 +976,7 @@ export async function runCli(
             return searchProducts(shoppingPage!, query);
           },
           decide,
-          add: async (task, candidate, quantity, option, before, cart, recordAdditionalDecision) => {
+          add: async (task, candidate, quantity, option, before, recordAdditionalDecision) => {
             status(`Adding and verifying ${task.ingredient.request}`);
             await cartNetworkObserver!.beginMutation(before);
             let clickError: unknown;
@@ -887,14 +990,14 @@ export async function runCli(
                 writeFileSync(join(itemDir, `quantity-evidence-${decisionAttempts.get(task.ingredient.id) ?? 0}.json`), `${JSON.stringify({ candidateId: candidate.id, selectedPackSize, quantityOptions, computedQuantity: computed }, null, 2)}\n`, { mode: 0o600 });
                 if (computed !== null) {
                   selectedQuantity = computed;
-                  weightedReason = `${computed} × ${selectedPackSize} covers ${task.ingredient.purchaseRequirement!.total.quantity} ${task.ingredient.purchaseRequirement!.total.unit}.`;
+                  weightedReason = `${computed} × ${selectedPackSize} selected for a target of ${task.ingredient.purchaseRequirement!.total.quantity} ${task.ingredient.purchaseRequirement!.total.unit} (±15% tolerance).`;
                   weighted = true;
                   return computed;
                 }
                 const started = Date.now();
                 let choice;
                 try {
-                  choice = await decide(task, [candidate], cart, quantityOptions, selectedPackSize);
+                  choice = await decide(task, [candidate], quantityOptions, selectedPackSize);
                 } finally {
                   recordAdditionalDecision(Date.now() - started);
                 }

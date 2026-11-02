@@ -12,31 +12,30 @@ const candidates: DecisionCandidate[] = [
   { id: "a", productName: "Organic chickpeas", packageSize: "15 oz", price: "$2", available: true, text: "Canned" },
   { id: "b", productName: "Unavailable chickpeas", packageSize: "15 oz", price: "$2", available: false, text: "Unavailable" },
 ];
-const cart = [{ productName: "Already beans", productId: "cart-1", quantity: 1 }];
-
 describe("bounded cart decisions", () => {
   it("parses each strict action and never accepts added", () => {
-    expect(parseDecision('{"action":"select","candidateId":"a","quantity":2,"option":null,"query":null,"cartProductId":null,"reason":null}')).toMatchObject({ action: "select", candidateId: "a", quantity: 2, option: null });
+    expect(parseDecision('{"action":"select","candidateId":"a","quantity":2,"option":null,"query":null,"reason":null}')).toMatchObject({ action: "select", candidateId: "a", quantity: 2, option: null });
     expect(() => parseDecision('{"action":"added","candidateId":"a"}')).toThrow("Invalid cart decision");
     expect(() => parseDecision('{"action":"skip","reason":"no match","extra":true}')).toThrow("Invalid cart decision");
-    expect(parseDecision('{"action":"search_again","candidateId":null,"quantity":1,"option":null,"query":"regular soy sauce","cartProductId":null,"reason":"No product candidates were supplied."}')).toEqual({ action: "search_again", query: "regular soy sauce" });
+    expect(parseDecision('{"action":"search_again","candidateId":null,"quantity":1,"option":null,"query":"regular soy sauce","reason":"No product candidates were supplied."}')).toEqual({ action: "search_again", query: "regular soy sauce" });
+    expect(() => parseDecision('{"action":"already_present","candidateId":null,"quantity":0,"option":null,"query":null,"cartProductId":"cart-1","reason":null}')).toThrow("Invalid cart decision");
   });
 
-  it("validates selected and existing IDs against observations", () => {
-    expect(parseAndValidateDecision('{"action":"select","candidateId":"a","quantity":1,"option":null,"query":null,"cartProductId":null,"reason":null}', candidates, cart).action).toBe("select");
-    expect(parseAndValidateDecision('{"action":"already_present","candidateId":null,"quantity":0,"option":null,"query":null,"cartProductId":"cart-1","reason":null}', candidates, cart).action).toBe("already_present");
-    expect(() => parseAndValidateDecision('{"action":"select","candidateId":"gone","quantity":1,"option":null,"query":null,"cartProductId":null,"reason":null}', candidates, cart)).toThrow("stale candidate");
-    expect(() => parseAndValidateDecision('{"action":"select","candidateId":"b","quantity":1,"option":null,"query":null,"cartProductId":null,"reason":null}', candidates, cart)).toThrow("unavailable");
-    expect(() => parseAndValidateDecision('{"action":"already_present","candidateId":null,"quantity":0,"option":null,"query":null,"cartProductId":"gone","reason":null}', candidates, cart)).toThrow("missing cart product");
+  it("validates selected IDs against current observations", () => {
+    expect(parseAndValidateDecision('{"action":"select","candidateId":"a","quantity":1,"option":null,"query":null,"reason":null}', candidates).action).toBe("select");
+    expect(() => parseAndValidateDecision('{"action":"select","candidateId":"gone","quantity":1,"option":null,"query":null,"reason":null}', candidates)).toThrow("stale candidate");
+    expect(() => parseAndValidateDecision('{"action":"select","candidateId":"b","quantity":1,"option":null,"query":null,"reason":null}', candidates)).toThrow("unavailable");
   });
 
   it("renders observations as bounded data and builds no-MCP invocation", () => {
-    const prompt = renderDecisionPrompt({ task: { ingredientId: "i", requested: "beans" }, candidates, currentCart: cart });
+    const prompt = renderDecisionPrompt({ task: { ingredientId: "i", requested: "beans" }, candidates: [{ ...candidates[0]!, description: "Mild, creamy chickpeas." }] });
     expect(prompt).toContain("BEGIN STOREFRONT OBSERVATION");
     expect(prompt).toContain("no browser");
-    expect(prompt).toContain("return `already_present` instead of adding another unit");
+    expect(prompt).toContain("quantity is the additional amount requested for this task");
+    expect(prompt).toContain("Do not offset, reuse, or count existing cart quantities");
+    expect(prompt).toContain('"description": "Mild, creamy chickpeas."');
     const invocation = buildDecisionInvocation({ rootDir: "/repo", outputPath: "/tmp/decision.json", schemaPath: "/repo/schemas/cart-decision.schema.json" });
-    expect(invocation.args).toContain("gpt-5.6-terra");
+    expect(invocation.args).toContain("gpt-6.1-terra");
     expect(invocation.args).toContain('model_reasoning_effort="medium"');
     expect(invocation.args.join(" ")).not.toContain("playwright");
     expect(invocation.args).toContain('permissions.wfm-model.extends=":read-only"');
@@ -48,7 +47,6 @@ describe("bounded cart decisions", () => {
     const prompt = renderDecisionPrompt({
       task: { ingredientId: "chicken", requested: "about 1.5 lb chicken thighs" },
       candidates: [candidates[0]!],
-      currentCart: [],
       quantityOptions: [{ quantity: 1, label: "1 est. 1.56 lb" }, { quantity: 2, label: "2 est. 3.12 lb" }],
     });
     expect(prompt).toContain("The selected product opened a weighted-item quantity chooser");
@@ -62,7 +60,6 @@ describe("bounded cart decisions", () => {
         total: { quantity: 2.6, unit: "kg", approximate: false }, optional: false, alternatives: [], sources: ["dinner.md"],
       } },
       candidates: [{ id: "chicken-id", productName: "Boneless Skinless Chicken Thighs", packageSize: null, price: "$5.49/lb", available: true, text: "Sold by weight" }],
-      currentCart: [],
       selectedPackSize: "3 Pound (Pack of 1)",
       quantityOptions: [
         { quantity: 1, label: "1 est. 2.75 lb" },
@@ -81,5 +78,22 @@ describe("bounded cart decisions", () => {
     const options = [1, 2, 3].map((quantity) => ({ quantity, label: `${quantity} estimated` }));
     expect(quantityFromSelectedPackSize(total, "3 Pound (Pack of 1)", options)).toBe(2);
     expect(quantityFromSelectedPackSize(total, null, options)).toBeNull();
+  });
+
+  it("accepts a modest shortfall instead of rounding up past the target range", () => {
+    const total = { quantity: 900, unit: "g", approximate: false };
+    const options = [1, 2, 3, 4].map((quantity) => ({ quantity, label: String(quantity) }));
+    expect(quantityFromSelectedPackSize(total, "10 oz", options)).toBe(3);
+    expect(quantityFromSelectedPackSize(total, "16 oz", options)).toBe(2);
+  });
+
+  it("uses the closest in-range option and otherwise the smallest sufficient listed option", () => {
+    const options = [1, 2, 3, 4].map((quantity) => ({ quantity, label: String(quantity) }));
+    expect(quantityFromSelectedPackSize({ quantity: 195, unit: "g", approximate: false }, "100 g", options)).toBe(2);
+    expect(quantityFromSelectedPackSize({ quantity: 240, unit: "g", approximate: false }, "100 g", options)).toBe(3);
+    expect(quantityFromSelectedPackSize({ quantity: 180, unit: "g", approximate: false }, "100 g", [options[0]!, options[2]!])).toBe(3);
+    expect(quantityFromSelectedPackSize({ quantity: 900, unit: "g", approximate: false }, "10 oz", [options[0]!])).toBeNull();
+    expect(quantityFromSelectedPackSize(undefined, "10 oz", options)).toBeNull();
+    expect(quantityFromSelectedPackSize({ quantity: 1, unit: "cup", approximate: false }, "10 oz", options)).toBeNull();
   });
 });

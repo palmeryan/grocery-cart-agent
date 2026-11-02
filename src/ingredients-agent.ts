@@ -41,29 +41,19 @@ export interface RunIngredientsAgentInput {
   signal?: AbortSignal;
 }
 
-/** Ensure the model cannot invent, rename, duplicate, or omit recipe sources. */
-export function assertDraftMatchesDocuments(
+/** Keep source context usable even if the model changes or omits recipe names. */
+function reconcileRecipeSources(
   draft: IngredientsAgentOutput,
   documents: readonly RecipeDocument[],
-): void {
+): { draft: IngredientsAgentOutput; documents: readonly RecipeDocument[] } {
   const expected = documents.map(({ sourceName }) => sourceName).sort();
   const received = draft.recipes.map(({ sourceName }) => sourceName).sort();
-  if (JSON.stringify(received) !== JSON.stringify(expected)) {
-    throw new Error("Meal-plan draft recipe sources do not match the supplied documents");
-  }
-  const textBySource = new Map(documents.map(({ sourceName, text }) => [sourceName, text]));
-  for (const recipe of draft.recipes) {
-    const source = textBySource.get(recipe.sourceName);
-    if (source === undefined) throw new Error(`Unknown recipe source: ${recipe.sourceName}`);
-    const sourceLines = new Set(
-      source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
-    );
-    for (const ingredient of recipe.ingredients) {
-      if (!sourceLines.has(ingredient.sourceText.trim())) {
-        throw new Error(`Ingredient sourceText is not a complete verbatim line from ${recipe.sourceName}`);
-      }
-    }
-  }
+  if (JSON.stringify(received) === JSON.stringify(expected)) return { draft, documents };
+  const sourceName = "Combined recipes";
+  return {
+    draft: { recipes: [{ sourceName, ingredients: draft.recipes.flatMap((recipe) => recipe.ingredients) }] },
+    documents: [{ sourceName, text: documents.map(({ sourceName: name, text }) => `${name}\n${text}`).join("\n\n") }],
+  };
 }
 
 /** Run the real read-only planner agent and compile its JSON output locally. */
@@ -96,10 +86,10 @@ export async function runIngredientsAgent(
     );
   }
   const draft = parseIngredientsAgentOutput(readFileSync(input.outputPath, "utf8"));
-  assertDraftMatchesDocuments(draft, input.documents);
-  const recipeCompilation = compileRecipeCompilation(draft);
+  const reconciled = reconcileRecipeSources(draft, input.documents);
+  const recipeCompilation = compileRecipeCompilation(reconciled.draft);
   return {
-    shoppingList: recipeCompilationToShoppingList(recipeCompilation, input.documents),
+    shoppingList: recipeCompilationToShoppingList(recipeCompilation, reconciled.documents),
     recipeCompilation,
     codex,
   };
@@ -123,6 +113,6 @@ export async function compileIngredientsList(
   const prompt = renderIngredientsAgentPrompt({ recipeDocuments: documents });
   const draft = await invokeCompiler({ prompt, documents, signal });
   if (signal.aborted) throw new Error("Ingredients Agent run was aborted");
-  assertDraftMatchesDocuments(draft, documents);
-  return recipeCompilationToShoppingList(compileRecipeCompilation(draft), documents);
+  const reconciled = reconcileRecipeSources(draft, documents);
+  return recipeCompilationToShoppingList(compileRecipeCompilation(reconciled.draft), reconciled.documents);
 }

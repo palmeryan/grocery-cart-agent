@@ -190,13 +190,7 @@ describe("report builder", () => {
     expect(report.verificationStatus).toBe("inconclusive");
   });
 
-  it("confirms already-present results against the structured baseline", () => {
-    const existing = {
-      ...item(),
-      status: "already_present" as const,
-      packageSize: null,
-      price: null,
-    };
+  it("does not count baseline groceries as a verified addition", () => {
     const baseline = inspection("Organic Apples");
     const report = buildCartReport({
       request,
@@ -204,9 +198,10 @@ describe("report builder", () => {
       preflight,
       baseline,
       final: baseline,
-      results: [existing],
+      results: [item()],
     });
     expect(report.runStatus).toBe("completed");
+    expect(report.verificationStatus).toBe("inconclusive");
     expect(report.finalCartDelta).toEqual([]);
   });
 

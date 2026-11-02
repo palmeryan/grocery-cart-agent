@@ -69,7 +69,7 @@
       "additionalProperties": false,
       "required": ["sourceText", "name", "amount", "preparation", "context", "optional", "alternatives", "unresolved"],
       "properties": {
-        "sourceText": { "type": "string", "minLength": 1, "description": "Entire verbatim source line, repeated for every independently purchasable component." },
+        "sourceText": { "type": "string", "minLength": 1, "description": "Relevant ingredient and quantity text from the recipe, repeated for independently purchasable components from the same mention." },
         "name": { "type": "string", "minLength": 1, "description": "Plan-wide canonical purchasable identity with only compatibility-relevant qualifiers." },
         "amount": { "$ref": "#/$defs/amount" },
         "preparation": { "type": ["string", "null"] },

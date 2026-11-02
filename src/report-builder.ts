@@ -65,7 +65,7 @@ const emptySelection = (
 });
 
 const asSelection = (result: CartItemResult): CartSelection => {
-  if (result.status === "added" || result.status === "already_present") {
+  if (result.status === "added") {
     return {
       ingredientId: result.ingredientId,
       requested: result.requested,
@@ -150,12 +150,8 @@ const verifyResults = (
   for (const result of results) {
     if (result.status === "skipped" || result.status === "failed") continue;
     if (!deltaAvailable) continue;
-    const verified =
-      result.status === "added"
-        ? cartItemsContain(delta, result)
-        : cartItemsContain(baseline.items, result) ||
-          cartItemsContain(final.items, result);
-    if (verified && result.status === "added") {
+    const verified = cartItemsContain(delta, result);
+    if (verified) {
       // Allocate each observed unit once across reported additions of the same product.
       const matched = delta.find((item) => itemMatchesResult(item, result))!;
       matched.quantity -= result.quantity === 1 ? Math.min(1, matched.quantity) : result.quantity;

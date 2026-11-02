@@ -19,8 +19,7 @@ they must not install software, start onboarding, or invoke another shopping run
   as unsupported instead of claiming the macOS browser flow will work there.
 - Check `node --version`, `npm --version`, `codex --version`, and the Chrome
   executable. Node must be at least 22.16.0. Model isolation was tested on
-  Codex CLI 0.160.0; other versions warn rather than being rejected solely
-  by version.
+  Codex CLI 0.160.0; do not reject other versions solely by version.
   Verify `codex exec --help` supports the flags used in `src/codex.ts` and
   `src/cart-decision.ts`; a version number alone is not a compatibility check.
 - Install missing prerequisites using official distributions and an existing

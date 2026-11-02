@@ -26,6 +26,7 @@
     "build": "tsc -p tsconfig.json",
     "release:source": "bash scripts/release-source.sh",
     "cart": "tsx src/cli.ts",
+    "model-check": "tsx src/model-tool-probe-cli.ts",
     "cart-build": "tsx src/cli.ts build",
     "shopper-helper": "tsx src/cli.ts shopper-helper",
     "ingredients-review": "tsx src/cli.ts ingredients-review",

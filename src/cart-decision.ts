@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import { buildRestrictedCodexInvocation, type CodexInvocation, type ReasoningEffort } from "./codex.js";
-import type { CartItemSnapshot, GroceryIngredient, ShoppingQuantity } from "./types.js";
+import type { GroceryIngredient, ShoppingQuantity } from "./types.js";
 import type { QuantityOption } from "./wfm-page.js";
 
-export const DECISION_MODEL = "gpt-5.6-terra" as const;
+export const DECISION_MODEL = "gpt-6.1-terra" as const;
 export const DECISION_REASONING_EFFORT = "medium" satisfies ReasoningEffort;
 
 export interface DecisionTask {
@@ -23,19 +23,18 @@ export interface DecisionCandidate {
   price: string | null;
   available: boolean | null;
   text: string;
+  description?: string | null;
 }
 
 export type CartDecision =
   | { action: "select"; candidateId: string; quantity: number; option: string | null; reason: string | null }
   | { action: "search_again"; query: string }
-  | { action: "already_present"; cartProductId: string }
   | { action: "skip"; reason: string };
 
 export interface DecisionPromptInput {
   task: DecisionTask;
   recipeContext?: readonly { id?: string; name: string; context?: string; text?: string }[];
   candidates: readonly DecisionCandidate[];
-  currentCart: readonly CartItemSnapshot[];
   quantityOptions?: readonly QuantityOption[];
   selectedPackSize?: string | null;
 }
@@ -85,8 +84,14 @@ export function quantityFromSelectedPackSize(
   const required = grams(total.quantity, total.unit);
   const perPack = grams(Number(pack[1]), pack[2]!);
   if (!required || !perPack) return null;
-  const count = Math.ceil(required / perPack);
-  return options.some((option) => option.quantity === count) ? count : null;
+  const listedCounts = options.map((option) => option.quantity).filter((quantity) => Number.isSafeInteger(quantity) && quantity > 0);
+  if (!listedCounts.length) return null;
+  const withinTolerance = listedCounts
+    .map((quantity) => ({ quantity, ratio: quantity * perPack / required }))
+    .filter(({ ratio }) => ratio >= 0.85 && ratio <= 1.15)
+    .sort((a, b) => Math.abs(a.ratio - 1) - Math.abs(b.ratio - 1) || a.quantity - b.quantity);
+  if (withinTolerance.length) return withinTolerance[0]!.quantity;
+  return listedCounts.filter((quantity) => quantity * perPack >= required).sort((a, b) => a - b)[0] ?? null;
 }
 
 export function parseDecision(text: string): CartDecision {
@@ -100,9 +105,6 @@ export function parseDecision(text: string): CartDecision {
   if (decision.action === "search_again" && typeof decision.query === "string" && decision.query.trim()) {
     return { action: "search_again", query: decision.query };
   }
-  if (decision.action === "already_present" && typeof decision.cartProductId === "string") {
-    return { action: "already_present", cartProductId: decision.cartProductId };
-  }
   if (decision.action === "skip" && typeof decision.reason === "string") {
     return { action: "skip", reason: decision.reason };
   }
@@ -112,17 +114,12 @@ export function parseDecision(text: string): CartDecision {
 export function validateDecision(
   decision: CartDecision,
   candidates: readonly DecisionCandidate[],
-  currentCart: readonly CartItemSnapshot[],
 ): CartDecision {
   if (decision.action === "select") {
     const candidate = candidates.find(({ id }) => id.toUpperCase() === decision.candidateId.toUpperCase());
     if (!candidate) throw new Error(`Cart decision selected stale candidate ID: ${decision.candidateId}`);
     if (!candidate.available) throw new Error(`Cart decision selected unavailable candidate: ${decision.candidateId}`);
     if (!Number.isSafeInteger(decision.quantity) || decision.quantity < 1) throw new Error("Cart decision quantity must be a positive safe integer");
-  } else if (decision.action === "already_present") {
-    if (!currentCart.some((item) => item.productId?.toUpperCase() === decision.cartProductId.toUpperCase())) {
-      throw new Error(`Cart decision referenced missing cart product ID: ${decision.cartProductId}`);
-    }
   }
   return decision;
 }
@@ -130,8 +127,7 @@ export function validateDecision(
 export function parseAndValidateDecision(
   text: string,
   candidates: readonly DecisionCandidate[],
-  currentCart: readonly CartItemSnapshot[],
-): CartDecision { return validateDecision(parseDecision(text), candidates, currentCart); }
+): CartDecision { return validateDecision(parseDecision(text), candidates); }
 
 export function buildDecisionInvocation(input: DecisionInvocationInput): DecisionInvocation {
   return buildRestrictedCodexInvocation({

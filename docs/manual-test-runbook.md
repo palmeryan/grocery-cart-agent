@@ -91,8 +91,9 @@ npm run shopper-helper -- monday-shawarma.md tuesday-braised-chicken-beans.md
 ### Larger fixtures
 
 - Proceed only after the supervised per-ingredient smoke succeeds.
-- To expand coverage, use these three 10-item fixtures and rerun one unchanged
-  request to check duplicate prevention:
+- To expand coverage, use these three 10-item fixtures. A supervised rerun of an
+  unchanged request should add its requested quantities again, with each new
+  addition verified against the cart baseline:
   - `examples/staples.json`
   - `examples/ambiguous.json`
   - `examples/substitutions.json`

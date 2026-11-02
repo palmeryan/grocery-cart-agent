@@ -77,7 +77,7 @@
           "requested": { "type": "string", "minLength": 1 },
           "status": {
             "type": "string",
-            "enum": ["added", "already_present", "skipped"]
+            "enum": ["added", "skipped"]
           },
           "productName": { "type": ["string", "null"] },
           "productId": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9]{10}$" },

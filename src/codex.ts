@@ -4,7 +4,7 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { finished } from "node:stream/promises";
 
 /** Default model settings for reproducible agent runs. */
-export const INGREDIENTS_AGENT_MODEL = "gpt-5.6-terra" as const;
+export const INGREDIENTS_AGENT_MODEL = "gpt-6.1-terra" as const;
 export const INGREDIENTS_AGENT_REASONING_EFFORT = "medium" as const;
 
 export const REASONING_EFFORTS = [
@@ -50,21 +50,34 @@ export interface RunCodexInput {
   killGraceMs?: number;
   /** Optional abort signal (Ctrl-C / SIGTERM path). */
   signal?: AbortSignal;
+  /** Optional Codex rollout trace destination for deterministic preflight inspection. */
+  rolloutTraceRoot?: string;
 }
 
 const DEFAULT_KILL_GRACE_MS = 2_000;
 const POST_KILL_REAP_MS = 1_000;
 const REAP_POLL_MS = 25;
 
-/** CLI version used for isolation verification; other versions warn, not fail. */
-export const TESTED_CODEX_VERSION = "0.160.0";
-
 // Each of these features can expose tools or discover/install additional tools.
-const DISABLED_MODEL_FEATURES = [
+export const DISABLED_MODEL_FEATURES = [
   "shell_tool", "unified_exec", "shell_snapshot", "apps", "plugins", "multi_agent",
   "browser_use", "browser_use_external", "computer_use", "hooks", "image_generation",
   "view_image", "code_mode", "code_mode_host", "remote_plugin", "skill_search",
   "skill_mcp_dependency_install", "workspace_dependencies",
+] as const;
+
+/** Settings shared by model invocations and the tool preflight policy. */
+export const RESTRICTED_MODEL_SETTINGS = [
+  'default_permissions="wfm-model"',
+  'permissions.wfm-model.extends=":read-only"',
+  'permissions.wfm-model.filesystem={ ":root"="deny", ":minimal"="read", ":tmpdir"="deny", ":slash_tmp"="deny", "/private/tmp"="deny" }',
+  'permissions.wfm-model.network.enabled=false',
+  'approval_policy="never"',
+  'agents.enabled=false',
+  'web_search="disabled"',
+  'project_doc_max_bytes=0',
+  'shell_environment_policy.inherit="none"',
+  ...DISABLED_MODEL_FEATURES.map((feature) => `features.${feature}=false`),
 ] as const;
 
 /** Forward existing values only; never inherit unrelated application secrets. */
@@ -81,21 +94,11 @@ export function codexEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.P
 }
 
 export function buildRestrictedCodexInvocation(
-  input: IngredientsAgentInvocationInput & { model: string; reasoningEffort: ReasoningEffort },
+  input: IngredientsAgentInvocationInput & { model: string; reasoningEffort: ReasoningEffort; omitStructuredOutput?: boolean },
 ): CodexInvocation {
   const outputPath = resolve(input.rootDir, input.outputPath);
   const workDir = resolve(input.workDir ?? join(dirname(outputPath), "model-work"));
-  const settings = [
-    'default_permissions="wfm-model"',
-    'permissions.wfm-model.extends=":read-only"',
-    'permissions.wfm-model.filesystem={ ":root"="deny", ":minimal"="read", ":tmpdir"="deny", ":slash_tmp"="deny", "/private/tmp"="deny" }',
-    'permissions.wfm-model.network.enabled=false',
-    'approval_policy="never"',
-    'web_search="disabled"',
-    'project_doc_max_bytes=0',
-    'shell_environment_policy.inherit="none"',
-    ...DISABLED_MODEL_FEATURES.map((feature) => `features.${feature}=false`),
-  ];
+  const settings = RESTRICTED_MODEL_SETTINGS;
   return {
     workDir,
     args: [
@@ -103,8 +106,9 @@ export function buildRestrictedCodexInvocation(
       "-c", `model_reasoning_effort=${JSON.stringify(input.reasoningEffort)}`,
       "--ignore-user-config", "--ignore-rules", "--strict-config", "--ephemeral",
       "--skip-git-repo-check", "--json",
-      "--output-schema", resolve(input.rootDir, input.schemaPath),
-      "--output-last-message", outputPath, "--cd", workDir,
+      ...(input.omitStructuredOutput ? [] : ["--output-schema", resolve(input.rootDir, input.schemaPath),
+        "--output-last-message", outputPath]),
+      "--cd", workDir,
       ...settings.flatMap((setting) => ["-c", setting]), "-",
     ],
   };
@@ -114,21 +118,6 @@ export function buildIngredientsAgentInvocation(input: IngredientsAgentInvocatio
   return buildRestrictedCodexInvocation({
     ...input, model: INGREDIENTS_AGENT_MODEL, reasoningEffort: INGREDIENTS_AGENT_REASONING_EFFORT,
   });
-}
-
-const checkedExecutables = new Set<string>();
-function warnOnUntestedCodex(executable: string, env: NodeJS.ProcessEnv, cwd: string): void {
-  if (checkedExecutables.has(executable)) return;
-  checkedExecutables.add(executable);
-  let version: string | undefined;
-  try {
-    version = /codex-cli\s+(\S+)/.exec(execFileSync(executable, ["--version"], {
-      env, cwd, encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"],
-    }))?.[1];
-  } catch { /* The real invocation will report unsupported flags or configuration. */ }
-  if (version !== TESTED_CODEX_VERSION) {
-    console.warn(`[security] Codex ${version ?? "version unknown"}: model isolation was tested on ${TESTED_CODEX_VERSION}. Tool removal uses individual feature switches; this version's tool inventory is unverified.`);
-  }
 }
 
 function openExclusiveLog(path: string): Promise<WriteStream> {
@@ -336,9 +325,9 @@ export async function runCodex(input: RunCodexInput): Promise<CodexResult> {
     stderr = await openExclusiveLog(input.stderrPath);
 
     const env = codexEnvironment();
+    if (input.rolloutTraceRoot) env.CODEX_ROLLOUT_TRACE_ROOT = resolve(input.rolloutTraceRoot);
     if (input.workDir) {
       mkdirSync(input.workDir, { recursive: true, mode: 0o700 });
-      warnOnUntestedCodex(input.executable, env, input.workDir);
     }
     const spawned = spawn(input.executable, input.args, {
       env,

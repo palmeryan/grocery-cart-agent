@@ -56,8 +56,7 @@ variables, and uses an empty working directory under the run folder.
 
 Direct model capabilities such as shell, browser, web search, connectors,
 plugins, hooks, and delegation are explicitly disabled. This configuration was
-tested on Codex CLI 0.160.0; other versions warn and still run if they accept the
-required settings. Unsupported settings fail without retrying with broader
+tested on Codex CLI 0.160.0. Unsupported settings fail without retrying with broader
 permissions. Individual feature switches are not a universal tool allowlist;
 new CLI capabilities require revalidation.
 
@@ -86,10 +85,15 @@ returns the tab to grocery search, and invokes a shopping decision for each list
 item. It verifies the browser remains in the
 shopping flow after every decision, and performs one deterministic final
 cart verification. The decision model chooses among observed product cards,
-requests a better search, identifies an existing item, or skips. The harness
-operates controls and confirms each mutation from cart responses. Degraded cart
-extraction before mutation fails the run because the baseline cannot safely
-prevent duplicates. Final reconciliation is reported independently as
+with product descriptions from the search page when available, requests a
+better search, or skips. Each run adds the requested groceries on top of the
+existing cart; rerunning a list adds those groceries again. Items already in
+the cart do not reduce the requested purchase quantities. The harness
+operates controls and confirms each mutation from cart responses. For measured
+weight and volume, shopping decisions accept totals within 15% of the requested
+amount and prefer the closest purchasable quantity. Degraded cart extraction
+before mutation fails the run because the baseline cannot reliably establish
+what was added. Final reconciliation is reported independently as
 `verificationStatus`: a mismatch or degraded final read is `inconclusive`,
 does not rewrite a successfully completed decision outcome, and leaves Chrome
 open for inspection. Execution failures and safety-boundary violations still
@@ -114,8 +118,9 @@ requirements, not steps you need to complete before handing it the link.
 - Node.js 22.16.0 or newer
 - Codex CLI supporting the isolation settings (tested on 0.160.0), signed into the intended ChatGPT account
 
-Shopping decisions default to `gpt-5.6-terra` with medium reasoning effort.
-Ingredients Agent settings remain fixed for recipe compilation.
+Shopping decisions and recipe compilation use `gpt-6.1-terra` with medium
+reasoning effort by default. Ingredients Agent settings remain fixed; model
+and effort flags override only shopping decisions.
 
 All harness commands below run from the repository root.
 
@@ -136,6 +141,20 @@ npm run lint
 The cart command launches and owns a dedicated normal Chrome instance at
 `~/.whole-foods-cart/chrome-profile`. It never attaches to the everyday Chrome
 profile.
+
+Before model-driven shopping or ingredient compilation, the helper runs a
+synthetic probe with the same model and restrictions, captures the tool
+definitions in its local Codex rollout trace, and checks the names against the
+explicit disabled-setting mapping. Known covered tools proceed; unknown or
+uncovered tools and inconclusive captures require review before task data is
+sent. `npm run model-check` runs the probe on its
+own. The probe contains no recipes, shopping list, or account data, and its
+local trace and logs are kept under `runs/`. It uses a model call and may incur
+usage costs. The captured request does not establish whether listed tools can
+execute or whether additional tools can be loaded later. Comparing names also
+cannot detect changed tool behavior or nested tools behind an existing tool.
+If the trace is unavailable, the result is inconclusive. Review requires an
+interactive terminal.
 
 1. Run `npm run login`.
 2. Sign in to Whole Foods Market and set your own delivery address and its

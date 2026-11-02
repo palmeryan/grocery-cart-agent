@@ -121,7 +121,7 @@ export interface RecipeCompilation {
 }
 
 
-export type SelectionStatus = "added" | "already_present" | "skipped";
+export type SelectionStatus = "added" | "skipped";
 
 export type CartItemResultStatus = SelectionStatus | "failed";
 

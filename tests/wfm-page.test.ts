@@ -2,7 +2,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { addCandidate, extractCandidates, parseSelectedPackSize, searchProducts, UnknownControlError, WfmPageError } from "../src/wfm-page.js";
+import { addCandidate, extractCandidates, parseSelectedPackSize, productDescriptionsFromNextData, searchProducts, UnknownControlError, WfmPageError } from "../src/wfm-page.js";
 
 let browser: Browser | undefined;
 let page: Page;
@@ -30,6 +30,16 @@ describe("WFM page adapter", () => {
     expect(parseSelectedPackSize("Select Size: 3 Pound (Pack of 1)\n1.5 Pound (Pack of 1)\n3 Pound (Pack of 1)"))
       .toBe("3 Pound (Pack of 1)");
   });
+  it("matches optional descriptions by ASIN and safely handles malformed metadata", () => {
+    expect(productDescriptionsFromNextData(JSON.stringify({ props: { pageProps: { productsInfo: [
+      { asin: "b0abc12345", description: "  Organic\nbeans\u0000 from the farm. " },
+      { asin: "B0OTHER123", description: 7 },
+      { asin: "B0LONG1234", description: "x".repeat(2100) },
+    ] } } })).get("B0ABC12345")).toBe("Organic beans from the farm.");
+    expect(productDescriptionsFromNextData("{broken").size).toBe(0);
+    expect(productDescriptionsFromNextData(JSON.stringify({ props: { pageProps: {} } })).size).toBe(0);
+    expect(productDescriptionsFromNextData(JSON.stringify({ props: { pageProps: { productsInfo: [{ asin: "b0long1234", description: "x".repeat(2100) }] } } })).get("B0LONG1234")).toHaveLength(2000);
+  });
   it.skipIf(!runBrowserFixtures)("extracts cards in the CLI's tsx runtime", () => {
     execFileSync(
       fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url)),
@@ -39,9 +49,9 @@ describe("WFM page adapter", () => {
   });
 
   it.skipIf(!runBrowserFixtures)("extracts ASIN-addressable card evidence", async () => {
-    await page.setContent(`<div><a href="/grocery/product/organic-beans-b0abc12345"><h2>Organic beans</h2><span data-testid="size">15 oz</span><span data-testid="price">$2.99</span></a><button>Add to cart</button><p>In stock</p></div>`);
+    await page.setContent(`<div><a href="/grocery/product/organic-beans-b0abc12345"><h2>Organic beans</h2><span data-testid="size">15 oz</span><span data-testid="price">$2.99</span></a><button>Add to cart</button><p>In stock</p></div><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"productsInfo":[{"asin":"B0ABC12345","description":"Organic beans from the farm."},{"asin":"B0NOTVISIBLE","description":"Hidden product"}]}}}</script>`);
     await page.evaluate(() => history.replaceState(null, "", "/grocery/search"));
-    await expect(extractCandidates(page)).resolves.toEqual([expect.objectContaining({ id: "b0abc12345", productName: "Organic beans", packageSize: "15 oz", price: "$2.99", available: true })]);
+    await expect(extractCandidates(page)).resolves.toEqual([expect.objectContaining({ id: "b0abc12345", productName: "Organic beans", packageSize: "15 oz", price: "$2.99", available: true, description: "Organic beans from the farm." })]);
   });
 
   it.skipIf(!runBrowserFixtures)("opens the encoded query URL and returns its cards", async () => {

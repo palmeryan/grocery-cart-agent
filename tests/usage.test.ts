@@ -19,6 +19,29 @@ const writeEvents = (
 };
 
 describe("usage rollup", () => {
+  it("prices GPT-6.1 Terra runs including cache reads and writes", () => {
+    const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-terra-61-"));
+    writeFileSync(join(runDir, "metadata.json"), JSON.stringify({ cartDecisionModel: "gpt-6.1-terra" }));
+    writeEvents(join(runDir, "cart-decision", "squash", "codex-events.jsonl"), {
+      input_tokens: 1_000_000,
+      cached_input_tokens: 900_000,
+      cache_write_input_tokens: 10_000,
+      output_tokens: 1_000,
+    });
+
+    expect(buildUsageSummary(runDir).totals).toMatchObject({
+      priced_invocation_count: 1,
+      unpriced_invocation_count: 0,
+      estimated_list_price_usd: {
+        uncached_input_usd: 0.1,
+        cached_input_usd: 0.045,
+        cache_write_surcharge_usd: 0.0025,
+        output_usd: 0.005,
+        total_usd: 0.1525,
+      },
+    });
+  });
+
   it("prices cart-decision runs that use Luna", () => {
     const runDir = mkdtempSync(join(tmpdir(), "wfm-usage-luna-"));
     writeFileSync(

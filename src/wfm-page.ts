@@ -7,6 +7,7 @@ export interface ProductCandidate {
   price: string | null;
   available: boolean | null;
   text: string;
+  description?: string | null;
 }
 
 export interface QuantityOption {
@@ -34,6 +35,28 @@ export class UnknownControlError extends WfmPageError {}
 
 const SEARCH_URL = "https://www.wholefoodsmarket.com/grocery/search";
 const WFM_HOSTS = new Set(["www.wholefoodsmarket.com", "wholefoodsmarket.com"]);
+const MAX_PRODUCT_DESCRIPTION_LENGTH = 2000;
+
+/** Parse optional description metadata without allowing it to create candidates. */
+export function productDescriptionsFromNextData(raw: string | null): Map<string, string> {
+  const descriptions = new Map<string, string>();
+  if (!raw) return descriptions;
+  try {
+    const root: unknown = JSON.parse(raw);
+    const productsInfo = (root as { props?: { pageProps?: { productsInfo?: unknown } } } | null)?.props?.pageProps?.productsInfo;
+    if (!Array.isArray(productsInfo)) return descriptions;
+    for (const product of productsInfo) {
+      if (!product || typeof product !== "object") continue;
+      const { asin, description } = product as { asin?: unknown; description?: unknown };
+      if (typeof asin !== "string" || typeof description !== "string") continue;
+      const normalized = description.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, MAX_PRODUCT_DESCRIPTION_LENGTH);
+      if (normalized) descriptions.set(asin.toUpperCase(), normalized);
+    }
+  } catch {
+    // Optional page metadata must never prevent visible card extraction.
+  }
+  return descriptions;
+}
 
 function ensureWfmPage(page: Page, searchPage = false): void {
   const url = new URL(page.url());
@@ -85,6 +108,8 @@ export async function searchProducts(page: Page, query: string): Promise<Product
 /** Read visible, ASIN-addressable WFM result cards. */
 export async function extractCandidates(page: Page): Promise<ProductCandidate[]> {
   ensureWfmPage(page, true);
+  const nextData = await page.locator("script#__NEXT_DATA__").evaluateAll((scripts) => scripts[0]?.textContent ?? null);
+  const descriptions = productDescriptionsFromNextData(nextData);
   const cards = cardLocators(page);
   const count = await cards.count();
   const result: ProductCandidate[] = [];
@@ -138,6 +163,7 @@ export async function extractCandidates(page: Page): Promise<ProductCandidate[]>
       price: data.price,
       available: availability,
       text: data.text,
+      description: descriptions.get(id.toUpperCase()) ?? null,
     });
   }
   return result;

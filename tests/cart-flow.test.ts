@@ -38,6 +38,35 @@ describe("harness cart flow", () => {
     expect(result.latestSnapshot?.items).toHaveLength(2);
   });
 
+  it("adds each same-ASIN request on top of a preexisting cart quantity", async () => {
+    const tasks = cartTasks({ recipes: [{ ...list.recipes[0]!, ingredients: [
+      { id: "rice-first", request: "rice" },
+      { id: "rice-second", request: "rice" },
+    ] }] });
+    const beforeSnapshots: unknown[] = [];
+    let addCount = 0;
+    const result = await runCartFlow({
+      tasks,
+      baseline: [{ productId: "B000000001", productName: "Rice already in cart", quantity: 2 }],
+      search: async () => [candidate("B000000001", "Rice")],
+      decide: async (_task, candidates) => ({ action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null }),
+      add: async (_task, selected, _quantity, _option, before) => {
+        beforeSnapshots.push([...before]);
+        addCount += 1;
+        return {
+          items: [{ asin: selected.id, quantity: 2 + addCount }],
+          observedAt: "now", url: "https://www.wholefoodsmarket.com/api/cartcache", method: "POST", status: 200,
+        };
+      },
+    });
+    expect(result.results.map((item) => item.status)).toEqual(["added", "added"]);
+    expect(beforeSnapshots).toEqual([
+      [{ asin: "B000000001", quantity: 2 }],
+      [{ asin: "B000000001", quantity: 3 }],
+    ]);
+    expect(result.latestSnapshot?.items).toEqual([{ asin: "B000000001", quantity: 4 }]);
+  });
+
   it("lets the model request one better search, without browser tools", async () => {
     const queries: string[] = [];
     const result = await runCartFlow({
@@ -74,12 +103,10 @@ describe("harness cart flow", () => {
   it("records an unresolved add as failed and uses its snapshot for the next item", async () => {
     const attempted: string[] = [];
     const baselines: unknown[] = [];
-    const carts: unknown[] = [];
     const result = await runCartFlow({
       tasks: cartTasks(list), baseline: [],
       search: async (query) => [candidate(query === "rice" ? "B000000001" : "B000000002", query)],
-      decide: async (_task, candidates, cart) => {
-        carts.push([...cart]);
+      decide: async (_task, candidates) => {
         return { action: "select", candidateId: candidates[0]!.id, quantity: 1, option: null, reason: null };
       },
       add: async (_task, selected, _quantity, _option, before) => {
@@ -97,7 +124,6 @@ describe("harness cart flow", () => {
     });
     expect(attempted).toEqual(["B000000001", "B000000002"]);
     expect(baselines).toEqual([[], [{ asin: "B000000001", quantity: 0.5 }]]);
-    expect(carts[1]).toMatchObject([{ productId: "B000000001", productName: "rice", quantity: 0.5 }]);
     expect(result.results.map((item) => item.status)).toEqual(["failed", "added"]);
     expect(result.results[0]?.failureReason).toContain("Could not correlate");
     expect(result.stopped).toBe(false);
@@ -226,7 +252,7 @@ describe("harness cart flow", () => {
       baseline: [],
       search: async () => [candidate("B000000001", "Chicken")],
       decide: async () => ({ action: "select", candidateId: "B000000001", quantity: 2, option: null, reason: "initial" }),
-      add: async (_task, _candidate, _quantity, _option, _before, _cart, recordDecision) => {
+      add: async (_task, _candidate, _quantity, _option, _before, recordDecision) => {
         recordDecision(25);
         return {
           snapshot: { items: [{ asin: "B000000001", quantity: 1.56 }], observedAt: "now", url: "https://www.wholefoodsmarket.com/api/cartcache", method: "POST", status: 200 },

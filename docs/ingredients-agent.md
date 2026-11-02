@@ -29,7 +29,7 @@ either do not affect the cart or are safer to derive locally.
 
 ## Deterministic responsibility
 
-Local code validates source provenance, assigns structural source references,
+Local code assigns structural source references,
 groups matching purchasable identities, includes every extracted ingredient,
 combines chosen shopping quantities, and emits the prioritized end-of-flow
 decision log. The only public ID is an opaque purchase-intent ID derived from
@@ -44,7 +44,9 @@ additive representation can use package arithmetic, ordinary culinary
 conversions, or contextual quantity inference, marked approximate where
 appropriate. It chooses one amount when the recipe gives a range; the original
 wording remains in the source quantity. The local compiler adds these chosen
-line quantities and rounds whole-item counts up to the number to buy.
+line quantities and rounds whole-item counts up to the number to buy. The agent
+normalizes each ingredient's contributions to one shared additive unit across
+recipes, preserving the original source quantities.
 
 The direct Cart Agent contract is
 [`schemas/shopping-list.schema.json`](../schemas/shopping-list.schema.json).

@@ -45,8 +45,8 @@ The LLM sees storefront observations as data and has no Playwright MCP tools on 
 ## Per-ingredient flow
 
 1. The harness takes the next ingredient and current cart snapshot, starts watching cart responses, and searches Whole Foods. Use the existing `request` as the initial query; the model may request another query if results are poor.
-2. The harness extracts the visible result cards: ASIN, name, size/options, price, availability, and relevant card text. The model receives these with the ingredient, recipe context, and cart context. It returns `select(candidateId, quantity, option?)`, `search_again(query)`, `already_present(cartProductId)`, or `skip(reason)`.
-3. The harness checks that the selected ID belongs to the current results (or that an `already_present` ID is in the cart), then uses the associated product and quantity controls. If it cannot read or operate a necessary control, it stops with diagnostics; it does not ask a browser agent to improvise.
+2. The harness extracts the visible result cards: ASIN, name, size/options, price, availability, and relevant card text. The model receives these with the ingredient and recipe context. It returns `select(candidateId, quantity, option?)`, `search_again(query)`, or `skip(reason)`. Selected quantities are additions to the existing cart for this request.
+3. The harness checks that the selected ID belongs to the current results, then uses the associated product and quantity controls. If it cannot read or operate a necessary control, it stops with diagnostics; it does not ask a browser agent to improvise.
 4. A successful full-cart response showing the selected ASIN's intended increase completes the ingredient. The harness derives `added` and product metadata from the observed mutation and card, then moves on without another model call. Weighted quantities must be compared in the units WFM actually reports. One final cart reconciliation closes the run.
 
 If a click may have committed but the cart effect is unknown, stop and inspect the cart before retrying. Never repeat the click merely because the UI or response timed out.
@@ -78,7 +78,7 @@ Keep these as reviewable increments, with a line-count/scope audit before mergin
 
 ## Verification and acceptance
 
-Automated fixtures must cover product choice, search retry, existing items, weighted/quantity controls, stale IDs, and uncertain cart mutations. Assert that the model cannot call browser tools or claim `added`, the harness cannot click an unobserved candidate, and a confirmed mutation advances without another model call. A changed page must either work or stop with the diagnostic contract above; silent misselection is unacceptable.
+Automated fixtures must cover product choice, search retry, additions to existing items, weighted/quantity controls, stale IDs, and uncertain cart mutations. Assert that the model cannot call browser tools or claim `added`, the harness cannot click an unobserved candidate, and a confirmed mutation advances without another model call. A changed page must either work or stop with the diagnostic contract above; silent misselection is unacceptable.
 
 Use captured storefront evidence to check decision quality, not only JSON validity. Then run a supervised live smoke on the dedicated profile with a small, known Shopping List: inspect the baseline first, verify the selected product and quantity, watch the mutation, and compare the final cart. Stop before checkout. A passing unit suite or CDP attachment check is not live cart acceptance.
 
